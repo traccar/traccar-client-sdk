@@ -72,6 +72,6 @@ android {
 }
 
 dependencies {
-    implementation("org.traccar:traccar-client-sdk:0.0.1-SNAPSHOT")
+    implementation("org.traccar:traccar-client-sdk:0.0.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 }
