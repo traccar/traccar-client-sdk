@@ -17,6 +17,7 @@ internal fun coreModule(): Module = module {
 
     single {
         TrackerEngine(
+            config = get(),
             stateStore = get(),
             queue = get(),
             network = get(),

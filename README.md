@@ -13,21 +13,21 @@ This repository publishes two artifacts:
 
 ```kotlin
 dependencies {
-    implementation("org.traccar:traccar-client-sdk:0.0.11")
+    implementation("org.traccar:traccar-client-sdk:0.0.25")
 }
 ```
 
 ### iOS (Swift Package Manager)
 
 ```swift
-.package(url: "https://github.com/traccar/traccar-client-sdk.git", from: "0.0.11")
+.package(url: "https://github.com/traccar/traccar-client-sdk.git", from: "0.0.25")
 ```
 
 ### Flutter
 
 ```yaml
 dependencies:
-  traccar_client_sdk: ^0.0.11
+  traccar_client_sdk: ^0.0.25
 ```
 
 ## Quick start
@@ -93,6 +93,7 @@ await tracker.stop();
 | `wakeLock` | `Boolean` | `false` | Hold a partial CPU wakelock while tracking (Android only). |
 | `buffer` | `Boolean` | `true` | When `true`, persist positions to a local SQLite queue and retry on failure. When `false`, attempt direct upload per position and drop on failure (real-time only). |
 | `notification` | `NotificationConfig` | defaults | Foreground-service notification text (Android only). |
+| `headers` | `Map<String, String>` | `emptyMap()` | Custom headers to include in the HTTP upload request. |
 
 ### `LocationConfig`
 

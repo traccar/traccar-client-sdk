@@ -6,6 +6,7 @@ buildscript {
     repositories {
         google()
         mavenCentral()
+        mavenLocal()
     }
 
     dependencies {
@@ -18,6 +19,7 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        mavenLocal()
     }
 }
 
@@ -71,6 +73,6 @@ android {
 }
 
 dependencies {
-    implementation("org.traccar:traccar-client-sdk:0.0.2")
+    implementation("org.traccar:traccar-client-sdk:0.0.1-SNAPSHOT")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 }

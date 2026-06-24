@@ -1,0 +1,3 @@
+ALTER TABLE Position ADD COLUMN batteryHealth TEXT;
+ALTER TABLE Position ADD COLUMN batteryVoltage INTEGER;
+ALTER TABLE Position ADD COLUMN batteryTemperature REAL;

@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class TrackerEngine internal constructor(
+    private val config: Config,
     private val stateStore: StateStore,
     private val queue: PositionQueue,
     private val network: NetworkMonitor,
@@ -82,16 +83,20 @@ class TrackerEngine internal constructor(
     private suspend fun syncLoop() {
         var backoff = initialBackoff
         while (currentCoroutineContext().isActive) {
-            val pending = queue.peek()
+            val limit = if (config.uploadJson) 100 else 1
+            val pending = queue.peek(limit)
             when {
-                pending == null -> pipelineWakeUp.receive()
+                pending.isEmpty() -> pipelineWakeUp.receive()
                 !network.isOnline.value -> {
                     Log.log("Offline, waiting for network")
                     network.isOnline.first { it }
                     Log.log("Network restored")
                 }
                 uploader.upload(pending) -> {
-                    queue.removeFirst()
+                    val maxId = pending.maxOfOrNull { it.id ?: 0L } ?: 0L
+                    if (maxId > 0L) {
+                        queue.remove(maxId)
+                    }
                     backoff = initialBackoff
                 }
                 else -> {

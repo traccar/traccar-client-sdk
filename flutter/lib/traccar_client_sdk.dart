@@ -57,6 +57,10 @@ class Config {
     this.buffer = true,
     this.preferPlatformProviders = false,
     this.notification = const NotificationConfig(),
+    this.headers = const {},
+    this.imei,
+    this.attributes = const {},
+    this.uploadJson = false,
   });
 
   final String serverUrl;
@@ -78,6 +82,18 @@ class Config {
 
   final NotificationConfig notification;
 
+  /// Custom headers to send with the HTTP request.
+  final Map<String, String> headers;
+
+  /// Optional IMEI of the device.
+  final String? imei;
+
+  /// Custom attributes/parameters to send with the HTTP request.
+  final Map<String, String> attributes;
+
+  /// When true, upload positions formatted as JSON array in batches.
+  final bool uploadJson;
+
   Map<String, Object?> _toMap() => {
         'serverUrl': serverUrl,
         'deviceId': deviceId,
@@ -86,6 +102,10 @@ class Config {
         'buffer': buffer,
         'preferPlatformProviders': preferPlatformProviders,
         'notification': notification._toMap(),
+        'headers': headers,
+        'imei': imei,
+        'attributes': attributes,
+        'uploadJson': uploadJson,
       };
 }
 

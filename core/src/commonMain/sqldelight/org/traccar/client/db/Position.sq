@@ -8,15 +8,18 @@ CREATE TABLE Position (
     speed REAL,
     bearing REAL,
     battery INTEGER,
-    charging INTEGER
+    charging INTEGER,
+    batteryHealth TEXT,
+    batteryVoltage INTEGER,
+    batteryTemperature REAL
 );
 
 enqueue:
-INSERT INTO Position(latitude, longitude, accuracy, time, altitude, speed, bearing, battery, charging)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO Position(latitude, longitude, accuracy, time, altitude, speed, bearing, battery, charging, batteryHealth, batteryVoltage, batteryTemperature)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 peek:
-SELECT latitude, longitude, accuracy, time, altitude, speed, bearing, battery, charging
+SELECT id, latitude, longitude, accuracy, time, altitude, speed, bearing, battery, charging, batteryHealth, batteryVoltage, batteryTemperature
 FROM Position
 ORDER BY id ASC
 LIMIT 1;
@@ -24,3 +27,13 @@ LIMIT 1;
 removeFirst:
 DELETE FROM Position
 WHERE id = (SELECT MIN(id) FROM Position);
+
+peekBatch:
+SELECT id, latitude, longitude, accuracy, time, altitude, speed, bearing, battery, charging, batteryHealth, batteryVoltage, batteryTemperature
+FROM Position
+ORDER BY id ASC
+LIMIT :limit;
+
+removeBatch:
+DELETE FROM Position
+WHERE id <= :maxId;

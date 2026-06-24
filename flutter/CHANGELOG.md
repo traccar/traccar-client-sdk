@@ -1,3 +1,7 @@
+## 0.0.25
+
+* Add support for custom HTTP headers in `Config`, enabling users to supply custom authentication, tokens, or other headers with every HTTP position upload request.
+
 ## 0.0.24
 
 * Android foreground service now returns `START_STICKY`, so after the OS kills the process under memory pressure it is recreated and re-foregrounded, resuming tracking from persisted state. Previously `START_NOT_STICKY` left tracking dead until an external trigger (boot, activity-recognition, geofence) fired. The failure path — initial `startForeground` blocked — still returns `START_NOT_STICKY` and calls `stopSelf()` to avoid restarting straight back into the same blocked state.

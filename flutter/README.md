@@ -30,7 +30,7 @@ await tracker.stop();
 
 ### Configuration
 
-`Config` accepts a `LocationConfig` (`accuracy`, `distanceMeters`, `intervalSeconds`, `angleDegrees`, `stopDetection`, `stopTimeoutSeconds`, `stationaryRadiusMeters`), a Boolean `buffer` (real-time-only when `false`), Android-only `wakeLock`, and a `NotificationConfig` for the Android foreground-service text. See the [main repo](https://github.com/traccar/traccar-client-sdk#configuration) for details and defaults.
+`Config` accepts a `LocationConfig` (`accuracy`, `distanceMeters`, `intervalSeconds`, `angleDegrees`, `stopDetection`, `stopTimeoutSeconds`, `stationaryRadiusMeters`), a Boolean `buffer` (real-time-only when `false`), Android-only `wakeLock`, a `NotificationConfig` for the Android foreground-service text, and a Map of custom `headers`. See the [main repo](https://github.com/traccar/traccar-client-sdk#configuration) for details and defaults.
 
 ## Permissions
 

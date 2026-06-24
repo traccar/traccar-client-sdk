@@ -39,7 +39,7 @@ class Tracker internal constructor(
         }
         Log.log("Position fetched ${raw.latitude},${raw.longitude}")
         val processed = batteryProcessor.process(raw)?.copy(alarm = alarm) ?: return false
-        return uploader.upload(processed)
+        return uploader.upload(listOf(processed))
     }
 
     suspend fun getLogs(): List<LogEntry> = Log.store?.all() ?: emptyList()

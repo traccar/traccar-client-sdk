@@ -13,3 +13,6 @@ local.properties
 xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+link_local.sh
+link_local
+.vscode/settings.json
