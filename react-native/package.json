@@ -1,6 +1,6 @@
 {
   "name": "react-native-traccar-client-sdk",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "React Native module for background location tracking. Wraps the Traccar Client SDK for Android and iOS.",
   "main": "src/index.tsx",
   "module": "src/index.tsx",
