@@ -1,3 +1,7 @@
+## 1.0.10
+
+* Attempt to fix iOS tracking
+
 ## 1.0.9
 
 * Validate location values

@@ -6,7 +6,7 @@ Requires Android API 24+ and iOS 15+.
 
 ```yaml
 dependencies:
-  traccar_client_sdk: ^1.0.9
+  traccar_client_sdk: ^1.0.10
 ```
 
 ## Documentation
