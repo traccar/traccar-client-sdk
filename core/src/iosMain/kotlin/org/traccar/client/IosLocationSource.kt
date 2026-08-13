@@ -86,11 +86,7 @@ class IosLocationSource(
         val newManager = CLLocationManager().apply {
             this.delegate = newDelegate
             desiredAccuracy = locationConfig.accuracy.toIosAccuracy()
-            distanceFilter = if (locationConfig.distanceMeters == 0) {
-                kCLDistanceFilterNone
-            } else {
-                locationConfig.distanceMeters.toDouble()
-            }
+            distanceFilter = kCLDistanceFilterNone
             allowsBackgroundLocationUpdates = true
             pausesLocationUpdatesAutomatically = false
         }
