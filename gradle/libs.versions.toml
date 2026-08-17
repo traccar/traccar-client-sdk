@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.3.21"
-agp = "9.2.0"
+agp = "9.2.1"
 coroutines = "1.11.0"
 ktor = "3.5.0"
 sqldelight = "2.3.2"
