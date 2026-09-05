@@ -1,3 +1,7 @@
+## 1.0.11
+
+* Add location to heartbeat
+
 ## 1.0.10
 
 * Attempt to fix iOS tracking

@@ -10,7 +10,7 @@ let package = Package(
         .library(name: "traccar-client-sdk", targets: ["traccar_client_sdk"])
     ],
     dependencies: [
-        .package(url: "https://github.com/traccar/traccar-client-sdk.git", exact: "1.0.10")
+        .package(url: "https://github.com/traccar/traccar-client-sdk.git", exact: "1.0.11")
     ],
     targets: [
         .target(
