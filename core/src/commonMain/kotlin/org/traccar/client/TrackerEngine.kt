@@ -64,7 +64,9 @@ class TrackerEngine internal constructor(
         val state = stateStore.state.value
         if (!state.enabled || !state.paused) return
         Log.log("HeartbeatTick")
-        heartbeatPositions.emit(Position(time = Clock.System.now().toEpochMilliseconds()))
+        val position = locationSource.fetchOnce()
+            ?: Position(time = Clock.System.now().toEpochMilliseconds())
+        heartbeatPositions.emit(position)
     }
 
     private suspend fun pipelineLoop() {
