@@ -1,3 +1,7 @@
+## 1.0.12
+
+* Fix Android tracking stuck active
+
 ## 1.0.11
 
 * Add location to heartbeat
