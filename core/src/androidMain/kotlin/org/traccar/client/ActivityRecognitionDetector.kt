@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.SystemClock
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityRecognitionResult
 import com.google.android.gms.location.ActivityTransition
@@ -28,7 +29,7 @@ class ActivityRecognitionDetector(
     private val scope: ComponentCoroutineScope,
     context: Context,
     config: Config,
-    state: StateFlow<State>,
+    private val state: StateFlow<State>,
 ) : SignalSource {
 
     private val stopTimeoutSeconds = config.location.stopTimeoutSeconds
@@ -41,13 +42,21 @@ class ActivityRecognitionDetector(
     private var pendingIntent: PendingIntent? = null
     private var samplingPendingIntent: PendingIntent? = null
     private var stopTimeoutJob: Job? = null
+    private var lastActivityTime = 0L
 
     init {
         scope.launch {
             ActivityRecognitionReceiver.events.collect { handleResult(it) }
         }
-        scope.observeState(state, { it.enabled }, inactive = false) { active ->
-            if (active) ensureRegistered() else ensureUnregistered()
+        scope.observeState(state, State::locationMode, inactive = LocationMode.Off) { mode ->
+            stopTimeoutJob?.cancel()
+            stopTimeoutJob = null
+            if (mode == LocationMode.Off) {
+                ensureUnregistered()
+            } else {
+                ensureRegistered()
+                if (mode == LocationMode.Active) startSampling() else stopSampling()
+            }
         }
     }
 
@@ -77,7 +86,11 @@ class ActivityRecognitionDetector(
         client.requestActivityTransitionUpdates(request, newPendingIntent)
             .addOnSuccessListener { Log.log("Activity transitions registered") }
             .addOnFailureListener { Log.log("Activity transitions failed: $it") }
+    }
 
+    private fun startSampling() {
+        if (pendingIntent == null || samplingPendingIntent != null) return
+        lastActivityTime = SystemClock.elapsedRealtime()
         val newSamplingPendingIntent = PendingIntent.getBroadcast(
             appContext,
             1,
@@ -85,7 +98,7 @@ class ActivityRecognitionDetector(
             PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         samplingPendingIntent = newSamplingPendingIntent
-        client.requestActivityUpdates(0, newSamplingPendingIntent)
+        client.requestActivityUpdates(30_000, newSamplingPendingIntent)
             .addOnSuccessListener { Log.log("Activity sampling requested") }
             .addOnFailureListener { Log.log("Activity sampling failed: $it") }
     }
@@ -119,6 +132,7 @@ class ActivityRecognitionDetector(
         result.transitionEvents.forEach { event ->
             Log.log("Activity transition: ${activityName(event.activityType)} ${transitionName(event.transitionType)}")
             if (event.activityType != DetectedActivity.STILL) return@forEach
+            lastActivityTime = maxOf(lastActivityTime, event.elapsedRealTimeNanos / 1_000_000)
             if (event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER) onStillEnter()
             else onStillExit()
         }
@@ -127,10 +141,17 @@ class ActivityRecognitionDetector(
     private fun handleSample(intent: Intent) {
         if (samplingPendingIntent == null) return
         val result = ActivityRecognitionResult.extractResult(intent) ?: return
-        stopSampling()
         val activity = result.mostProbableActivity
         Log.log("Activity sample: ${activityName(activity.type)} ${activity.confidence}%")
-        if (activity.type == DetectedActivity.STILL) onStillEnter()
+        val time = result.elapsedRealtimeMillis
+        if (time <= lastActivityTime || SystemClock.elapsedRealtime() - time !in 0..60_000) return
+        if (activity.confidence < 75) return
+        lastActivityTime = time
+        when (activity.type) {
+            DetectedActivity.STILL -> onStillEnter()
+            DetectedActivity.IN_VEHICLE, DetectedActivity.ON_BICYCLE, DetectedActivity.ON_FOOT,
+            DetectedActivity.RUNNING, DetectedActivity.WALKING -> onStillExit()
+        }
     }
 
     private fun activityName(type: Int): String = when (type) {
@@ -149,7 +170,7 @@ class ActivityRecognitionDetector(
     }
 
     private fun onStillEnter() {
-        stopTimeoutJob?.cancel()
+        if (!state.value.enabled || state.value.paused || stopTimeoutJob?.isActive == true) return
         Log.log("Stop detection: arming ${stopTimeoutSeconds}s timeout")
         stopTimeoutJob = scope.launch {
             delay(stopTimeoutSeconds.seconds)
