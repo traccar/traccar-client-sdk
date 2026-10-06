@@ -1,1 +1,1 @@
-rootProject.name = 'traccar_client_sdk'
+rootProject.name = "traccar_client_sdk"

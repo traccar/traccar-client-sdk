@@ -16,10 +16,11 @@ Full documentation - installation, configuration, API, and architecture - is on 
 
 ## Development
 
-Use JDK 17 or newer supported by Gradle, Android SDK 37, and Xcode 26.6 for native builds. The Gradle wrapper pins the build tool version.
+Use JDK 17 or newer supported by Gradle, Android SDK 37, and Xcode 26.6 for native builds. The Gradle wrapper pins the build tool version. Flutter development requires Flutter 3.47+ and Dart 3.13+.
 
 ```sh
 ./gradlew :samples:android:assembleDebug :core:assembleTraccarClientSDKReleaseXCFramework
+(cd flutter && flutter pub get && flutter analyze)
 ```
 
 Regenerate the iOS sample project with `xcodegen generate --spec samples/ios/project.yml` after changing its project settings.

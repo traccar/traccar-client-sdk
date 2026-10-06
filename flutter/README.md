@@ -2,7 +2,7 @@
 
 Flutter plugin for background location tracking. Wraps the [Traccar Client SDK](https://github.com/traccar/traccar-client-sdk) for Android and iOS, sending position updates over a simple HTTP protocol that works with [Traccar](https://www.traccar.org) and any compatible server.
 
-Requires Android API 24+ and iOS 15+.
+Requires Flutter 3.47+, Dart 3.13+, Android API 24+, and iOS 15+. Android hosts must compile with SDK 37 or newer and use Kotlin 2.4.20 or newer.
 
 ```yaml
 dependencies:

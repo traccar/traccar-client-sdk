@@ -13,3 +13,8 @@ local.properties
 xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+
+.dart_tool/
+.flutter-plugins-dependencies
+flutter/pubspec.lock
+flutter/ios/FlutterFramework/

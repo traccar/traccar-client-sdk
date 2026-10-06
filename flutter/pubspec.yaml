@@ -4,13 +4,12 @@ version: 1.0.12
 repository: https://github.com/traccar/traccar-client-sdk
 
 environment:
-  sdk: ^3.11.5
-  flutter: '>=3.3.0'
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
 
 dependencies:
   flutter:
     sdk: flutter
-  plugin_platform_interface: ^2.0.2
 
 dev_dependencies:
   flutter_test:
