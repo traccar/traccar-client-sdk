@@ -1,3 +1,12 @@
+## 1.1.0
+
+* Update automation tooling
+* Modernize React Native package
+* Modernize Flutter plugin
+* Update native iOS project
+* Update core dependencies and Android SDK
+* Update core build tooling
+
 ## 1.0.12
 
 * Fix Android tracking stuck active
