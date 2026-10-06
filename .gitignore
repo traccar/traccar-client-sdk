@@ -14,6 +14,8 @@ xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 
+node_modules/
+react-native/lib/
 .dart_tool/
 .flutter-plugins-dependencies
 flutter/pubspec.lock

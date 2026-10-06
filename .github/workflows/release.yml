@@ -22,6 +22,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
       - name: Resolve version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
@@ -59,9 +65,9 @@ jobs:
           sed -i '' "s|traccar_client_sdk: \^.*|traccar_client_sdk: ^${VERSION}|" flutter/README.md
           sed -i '' "s|traccar-client-sdk:[^\"]*|traccar-client-sdk:${VERSION}|" flutter/android/build.gradle.kts
           sed -i '' "s|exact: \"[^\"]*\"|exact: \"${VERSION}\"|" flutter/ios/traccar_client_sdk/Package.swift
-          sed -i '' "s|\"version\": \"[^\"]*\"|\"version\": \"${VERSION}\"|" react-native/package.json
+          (cd react-native && npm version "$VERSION" --no-git-tag-version --allow-same-version --ignore-scripts)
           sed -i '' "s|traccar-client-sdk:[^\"]*|traccar-client-sdk:${VERSION}|" react-native/android/build.gradle
-          git add flutter/CHANGELOG.md flutter/pubspec.yaml flutter/README.md flutter/android/build.gradle.kts flutter/ios/traccar_client_sdk/Package.swift react-native/package.json react-native/android/build.gradle
+          git add flutter/CHANGELOG.md flutter/pubspec.yaml flutter/README.md flutter/android/build.gradle.kts flutter/ios/traccar_client_sdk/Package.swift react-native/package.json react-native/package-lock.json react-native/android/build.gradle
           git commit -m "Release ${VERSION}"
           git push origin HEAD:main
 
@@ -97,15 +103,12 @@ jobs:
           dart pub get
           dart pub publish -f
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
-
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
 
       - name: Publish to npm
         working-directory: react-native
-        run: npm publish
+        run: |
+          npm ci
+          npm run typecheck
+          npm publish

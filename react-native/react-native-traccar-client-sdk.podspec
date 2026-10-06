@@ -16,6 +16,10 @@ Pod::Spec.new do |spec|
   spec.source_files = "ios/**/*.{h,m,mm,swift}"
   spec.vendored_frameworks = "ios/TraccarClientSDK.xcframework"
   spec.libraries = "sqlite3"
+  spec.swift_version = "5.0"
+  spec.resource_bundles = {
+    "TraccarClientSdkPrivacy" => ["ios/PrivacyInfo.xcprivacy"]
+  }
 
   # Fetch the prebuilt Kotlin/Native XCFramework from the matching GitHub
   # release, unless a locally built copy has already been placed in ios/.

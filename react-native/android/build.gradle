@@ -9,37 +9,33 @@ buildscript {
   }
 
   dependencies {
-    classpath "com.android.tools.build:gradle:8.1.1"
-    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${safeExtGet('kotlinVersion', '2.2.20')}"
+    classpath "com.android.tools.build:gradle:9.4.1"
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:${safeExtGet('kotlinVersion', '2.4.20')}"
   }
 }
 
 apply plugin: "com.android.library"
-apply plugin: "kotlin-android"
+if (project.extensions.findByName("kotlin") == null) {
+  apply plugin: "kotlin-android"
+}
 
 android {
   namespace "org.traccar.reactnative"
-  compileSdkVersion safeExtGet('compileSdkVersion', 34)
+  compileSdkVersion safeExtGet('compileSdkVersion', 37)
 
   defaultConfig {
     minSdkVersion safeExtGet('minSdkVersion', 24)
-    targetSdkVersion safeExtGet('targetSdkVersion', 34)
   }
 
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
   }
+}
 
-  kotlinOptions {
-    jvmTarget = "17"
-    freeCompilerArgs += "-Xskip-metadata-version-check"
-  }
-
-  sourceSets {
-    main {
-      java.srcDirs += "src/main/java"
-    }
+kotlin {
+  compilerOptions {
+    jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
   }
 }
 
@@ -49,7 +45,7 @@ repositories {
 }
 
 dependencies {
-  implementation "com.facebook.react:react-native:+"
+  implementation "com.facebook.react:react-android"
   implementation "org.traccar:traccar-client-sdk:1.0.12"
   implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
 }

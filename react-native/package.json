@@ -2,13 +2,14 @@
   "name": "react-native-traccar-client-sdk",
   "version": "1.0.12",
   "description": "React Native module for background location tracking. Wraps the Traccar Client SDK for Android and iOS.",
-  "main": "src/index.tsx",
-  "module": "src/index.tsx",
-  "types": "src/index.tsx",
+  "main": "./lib/module/index.js",
+  "module": "./lib/module/index.js",
+  "types": "./lib/typescript/src/index.d.ts",
   "react-native": "src/index.tsx",
   "source": "src/index.tsx",
   "files": [
     "src",
+    "lib",
     "android",
     "ios",
     "react-native-traccar-client-sdk.podspec",
@@ -27,5 +28,42 @@
   "peerDependencies": {
     "react": "*",
     "react-native": "*"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/typescript/src/index.d.ts",
+      "react-native": "./src/index.tsx",
+      "default": "./lib/module/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "prepare": "bob build",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "react": "^19.3.0",
+    "react-native": "0.87.1",
+    "react-native-builder-bob": "^0.43.1",
+    "typescript": "^7.0.2"
+  },
+  "react-native-builder-bob": {
+    "source": "src",
+    "output": "lib",
+    "targets": [
+      [
+        "module",
+        {
+          "esm": true
+        }
+      ],
+      [
+        "typescript",
+        {
+          "project": "tsconfig.build.json"
+        }
+      ]
+    ]
   }
 }
