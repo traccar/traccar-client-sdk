@@ -13,7 +13,7 @@
 
 /* Begin PBXFileReference section */
 		03A50C82864A31E26167CD67 /* TraccarClientSample.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TraccarClientSample.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		4A6ECE8FD446763C918E24A8 /* core */ = {isa = PBXFileReference; lastKnownFileType = folder; name = core; path = ../../core; sourceTree = SOURCE_ROOT; };
+		722AE19B6C7815597FBF89A7 /* traccar-client-sdk */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "traccar-client-sdk"; path = ../..; sourceTree = SOURCE_ROOT; };
 		C789E5F13C19BC8DE0FC6E09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E9076E425554249ED045963C /* SampleApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -51,7 +51,7 @@
 		DBDB703E5D5087F37526BBB2 /* Packages */ = {
 			isa = PBXGroup;
 			children = (
-				4A6ECE8FD446763C918E24A8 /* core */,
+				722AE19B6C7815597FBF89A7 /* traccar-client-sdk */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -94,7 +94,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
 				};
 			};
@@ -108,7 +108,7 @@
 			mainGroup = 8689B513B9833BC2B65F17E3;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				93F45BD64F297541923899E2 /* XCLocalSwiftPackageReference "../.." */,
+				1E28219CF82C08F7F84B440E /* XCLocalSwiftPackageReference "../.." */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = FBE346A81B8685B86627180E /* Products */;
@@ -170,7 +170,7 @@
 				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = org.traccar.client.sample;
 				SDKROOT = iphoneos;
-				SWIFT_VERSION = 5.5;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -191,7 +191,7 @@
 				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = org.traccar.client.sample;
 				SDKROOT = iphoneos;
-				SWIFT_VERSION = 5.5;
+				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -339,7 +339,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		93F45BD64F297541923899E2 /* XCLocalSwiftPackageReference "../.." */ = {
+		1E28219CF82C08F7F84B440E /* XCLocalSwiftPackageReference "../.." */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../..;
 		};

@@ -6,7 +6,7 @@ private let defaultDeviceId = "123456"
 
 @main
 struct SampleApp: App {
-    @State private var tracker: Tracker?
+    @SwiftUI.State private var tracker: Tracker?
 
     var body: some Scene {
         WindowGroup {
@@ -26,16 +26,16 @@ struct SampleApp: App {
 struct ContentView: View {
     let initialTracker: Tracker
 
-    @State private var tracker: Tracker
-    @State private var serverUrl: String
-    @State private var deviceId: String
-    @State private var isTracking = false
+    @SwiftUI.State private var tracker: Tracker
+    @SwiftUI.State private var serverUrl: String
+    @SwiftUI.State private var deviceId: String
+    @SwiftUI.State private var isTracking = false
 
     init(initialTracker: Tracker) {
         self.initialTracker = initialTracker
-        self._tracker = State(initialValue: initialTracker)
-        self._serverUrl = State(initialValue: initialTracker.config.serverUrl)
-        self._deviceId = State(initialValue: initialTracker.config.deviceId)
+        self._tracker = SwiftUI.State(initialValue: initialTracker)
+        self._serverUrl = SwiftUI.State(initialValue: initialTracker.config.serverUrl)
+        self._deviceId = SwiftUI.State(initialValue: initialTracker.config.deviceId)
     }
 
     var body: some View {

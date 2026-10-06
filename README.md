@@ -14,6 +14,16 @@ Full documentation - installation, configuration, API, and architecture - is on 
 - **Flutter:** https://www.traccar.org/traccar-client-sdk-flutter/
 - **React Native:** https://www.traccar.org/traccar-client-sdk-react-native/
 
+## Development
+
+Use JDK 17 or newer supported by Gradle, Android SDK 37, and Xcode 26.6 for native builds. The Gradle wrapper pins the build tool version.
+
+```sh
+./gradlew :samples:android:assembleDebug :core:assembleTraccarClientSDKReleaseXCFramework
+```
+
+Regenerate the iOS sample project with `xcodegen generate --spec samples/ios/project.yml` after changing its project settings.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

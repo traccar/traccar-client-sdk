@@ -1,11 +1,12 @@
 name: TraccarClientSample
 options:
+  xcodeVersion: "26.6"
   bundleIdPrefix: org.traccar.client.sample
   deploymentTarget:
     iOS: "15.0"
 packages:
   TraccarClientSDK:
-    path: ../../core
+    path: ../..
 targets:
   TraccarClientSample:
     type: application
@@ -17,14 +18,17 @@ targets:
         NSLocationWhenInUseUsageDescription: Required for location tracking.
         NSLocationAlwaysAndWhenInUseUsageDescription: Required for background location tracking.
         NSMotionUsageDescription: Required for stop detection.
+        BGTaskSchedulerPermittedIdentifiers:
+          - org.traccar.client.heartbeat
         UIBackgroundModes:
+          - fetch
           - location
         UILaunchScreen: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.traccar.client.sample
         TARGETED_DEVICE_FAMILY: "1,2"
-        SWIFT_VERSION: "5.5"
+        SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"

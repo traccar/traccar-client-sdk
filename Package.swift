@@ -1,4 +1,4 @@
-// swift-tools-version:5.5
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
@@ -18,7 +18,8 @@ let package = Package(
             name: "TraccarClientAutoInit",
             dependencies: ["TraccarClientSDK"],
             path: "core/Sources/TraccarClientAutoInit",
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
     ]
 )
