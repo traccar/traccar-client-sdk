@@ -151,7 +151,9 @@ class ActivityRecognitionDetector(
             DetectedActivity.STILL -> onStillEnter()
             DetectedActivity.IN_VEHICLE, DetectedActivity.ON_BICYCLE, DetectedActivity.ON_FOOT,
             DetectedActivity.RUNNING, DetectedActivity.WALKING -> onStillExit()
+            else -> return
         }
+        stopSampling() // resume transition-based detection
     }
 
     private fun activityName(type: Int): String = when (type) {
