@@ -11,7 +11,7 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "FlutterFramework", path: "../FlutterFramework"),
-        .package(url: "https://github.com/traccar/traccar-client-sdk.git", exact: "1.1.0")
+        .package(url: "https://github.com/traccar/traccar-client-sdk.git", exact: "1.1.1")
     ],
     targets: [
         .target(

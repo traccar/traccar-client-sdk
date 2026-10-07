@@ -1,3 +1,7 @@
+## 1.1.1
+
+* Limit activity sampling to startup and resume
+
 ## 1.1.0
 
 * Update automation tooling
