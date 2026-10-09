@@ -1,3 +1,7 @@
+## 1.1.2
+
+* Fix distance filter
+
 ## 1.1.1
 
 * Limit activity sampling to startup and resume

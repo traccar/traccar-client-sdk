@@ -6,7 +6,7 @@ Requires Flutter 3.47+, Dart 3.13+, Android API 24+, and iOS 15+. Android hosts 
 
 ```yaml
 dependencies:
-  traccar_client_sdk: ^1.1.1
+  traccar_client_sdk: ^1.1.2
 ```
 
 ## Documentation

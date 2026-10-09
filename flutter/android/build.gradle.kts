@@ -63,6 +63,6 @@ kotlin {
 }
 
 dependencies {
-    implementation("org.traccar:traccar-client-sdk:1.1.1")
+    implementation("org.traccar:traccar-client-sdk:1.1.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 }
