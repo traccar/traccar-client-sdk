@@ -37,7 +37,8 @@ class LocationFilter(
         }
         val timeTrigger = locationConfig.intervalSeconds > 0 &&
             (position.time - previous.time) >= locationConfig.intervalSeconds * 1000L
-        val distanceTrigger = distance(previous, position) >= locationConfig.distanceMeters
+        val distanceTrigger = locationConfig.distanceMeters > 0 &&
+            distance(previous, position) >= locationConfig.distanceMeters
         val angleTrigger = locationConfig.angleDegrees > 0 &&
             previous.bearing != null && position.bearing != null &&
             bearingChange(previous.bearing, position.bearing) >= locationConfig.angleDegrees
