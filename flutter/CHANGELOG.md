@@ -1,3 +1,7 @@
+## 1.1.3
+
+* Fix stationary heartbeat filtering
+
 ## 1.1.2
 
 * Fix distance filter
