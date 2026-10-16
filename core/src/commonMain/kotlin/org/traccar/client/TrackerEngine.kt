@@ -66,7 +66,7 @@ class TrackerEngine internal constructor(
         Log.log("HeartbeatTick")
         val position = locationSource.fetchOnce()
             ?: Position(time = Clock.System.now().toEpochMilliseconds())
-        heartbeatPositions.emit(position)
+        heartbeatPositions.emit(position.copy(heartbeat = true))
     }
 
     private suspend fun pipelineLoop() {

@@ -1,6 +1,7 @@
 package org.traccar.client
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class Position(
@@ -14,4 +15,5 @@ data class Position(
     val battery: Int? = null,
     val charging: Boolean? = null,
     val alarm: String? = null,
+    @Transient val heartbeat: Boolean = false,
 )

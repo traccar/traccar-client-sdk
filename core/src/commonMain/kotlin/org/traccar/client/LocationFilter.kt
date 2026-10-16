@@ -18,7 +18,7 @@ class LocationFilter(
     private var lastProcessedPaused: Boolean = stateStore.state.value.paused
 
     override suspend fun process(position: Position): Position? {
-        if (position.latitude == null || position.longitude == null) {
+        if (position.heartbeat || position.latitude == null || position.longitude == null) {
             Log.log("Heartbeat accepted")
             return position
         }
