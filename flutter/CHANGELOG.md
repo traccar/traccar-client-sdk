@@ -1,3 +1,7 @@
+## 1.1.4
+
+* Add support for custom HTTP headers
+
 ## 1.1.3
 
 * Fix stationary heartbeat filtering
