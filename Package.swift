@@ -12,7 +12,7 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "TraccarClientSDK",
-            path: "core/build/XCFrameworks/release/TraccarClientSDK.xcframework"
+            url: "https://github.com/traccar/traccar-client-sdk/releases/download/v1.1.4/TraccarClientSDK.xcframework.zip", checksum: "52d0d0a2749e0f7de555c26d416ff9ae02ffc344b6048563fbae861dbe21d96d"
         ),
         .target(
             name: "TraccarClientAutoInit",
