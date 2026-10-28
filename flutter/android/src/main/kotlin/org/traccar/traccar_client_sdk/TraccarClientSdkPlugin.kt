@@ -86,11 +86,13 @@ class TraccarClientSdkPlugin :
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun parseConfig(args: Map<*, *>): Config {
         val location = args["location"] as Map<*, *>
         val notification = args["notification"] as Map<*, *>
         return Config(
             serverUrl = args["serverUrl"] as String,
+            headers = args["headers"] as? Map<String, String> ?: emptyMap(),
             deviceId = args["deviceId"] as String,
             location = LocationConfig(
                 accuracy = Accuracy.valueOf(location["accuracy"] as String),

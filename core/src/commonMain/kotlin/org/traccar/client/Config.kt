@@ -11,6 +11,7 @@ data class Config(
     val buffer: Boolean = true,
     val preferPlatformProviders: Boolean = false,
     val notification: NotificationConfig = NotificationConfig(),
+    val headers: Map<String, String> = emptyMap(),
 ) {
     constructor(serverUrl: String, deviceId: String) : this(serverUrl, deviceId, LocationConfig())
 }

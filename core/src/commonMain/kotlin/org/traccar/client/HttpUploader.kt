@@ -29,7 +29,9 @@ class HttpUploader(
                 position.charging?.let { append("charge", it.toString()) }
                 position.alarm?.let { append("alarm", it) }
             },
-        )
+        ) {
+            config.headers.forEach { (name, value) -> headers.append(name, value) }
+        }
         Log.log("Upload response ${response.status.value}")
         response.status.isSuccess()
     } catch (e: CancellationException) {

@@ -97,11 +97,13 @@ class TraccarClientSdkModule(
         }
     }
 
+    @Suppress("UNCHECKED_CAST")
     private fun parseConfig(config: ReadableMap): Config {
         val location = config.getMap("location")!!
         val notification = config.getMap("notification")!!
         return Config(
             serverUrl = config.getString("serverUrl")!!,
+            headers = config.getMap("headers")?.toHashMap() as? Map<String, String> ?: emptyMap(),
             deviceId = config.getString("deviceId")!!,
             location = LocationConfig(
                 accuracy = Accuracy.valueOf(location.getString("accuracy")!!),

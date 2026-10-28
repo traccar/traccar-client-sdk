@@ -149,7 +149,8 @@ class TraccarClientSdk: NSObject {
       wakeLock: args["wakeLock"] as! Bool,
       buffer: args["buffer"] as! Bool,
       preferPlatformProviders: args["preferPlatformProviders"] as! Bool,
-      notification: NotificationConfig(text: notification["text"] as! String)
+      notification: NotificationConfig(text: notification["text"] as! String),
+      headers: args["headers"] as? [String: String] ?? [:]
     )
   }
 

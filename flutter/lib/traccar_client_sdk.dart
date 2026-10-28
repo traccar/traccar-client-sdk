@@ -51,6 +51,7 @@ class NotificationConfig {
 class Config {
   const Config({
     required this.serverUrl,
+    this.headers = const {},
     required this.deviceId,
     this.location = const LocationConfig(),
     this.wakeLock = false,
@@ -60,6 +61,10 @@ class Config {
   });
 
   final String serverUrl;
+
+  /// Additional HTTP headers, including Authorization. Persisted with the config.
+  final Map<String, String> headers;
+
   final String deviceId;
   final LocationConfig location;
 
@@ -80,6 +85,7 @@ class Config {
 
   Map<String, Object?> _toMap() => {
         'serverUrl': serverUrl,
+        'headers': headers,
         'deviceId': deviceId,
         'location': location._toMap(),
         'wakeLock': wakeLock,

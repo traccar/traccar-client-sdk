@@ -39,6 +39,8 @@ export interface NotificationConfig {
 /** Tracker configuration. Pass to `init` or `setConfig`. */
 export interface Config {
   serverUrl: string;
+  /** Additional HTTP headers, including Authorization. Persisted with the config. */
+  headers?: Record<string, string>;
   deviceId: string;
   location?: LocationConfig;
   /** Hold a wakelock while tracking (Android only). */
@@ -69,6 +71,7 @@ function normalizeConfig(config: Config): Required<Config> {
   const notification = config.notification ?? {};
   return {
     serverUrl: config.serverUrl,
+    headers: config.headers ?? {},
     deviceId: config.deviceId,
     location: {
       accuracy: location.accuracy ?? 'MEDIUM',
