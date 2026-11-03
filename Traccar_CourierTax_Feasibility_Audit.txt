@@ -1,0 +1,1232 @@
+# Traccar Client SDK → CourierTax feasibility audit
+
+**Recommendation: CONDITIONAL GO for a small, measured proof of concept; not approval to ship background tracking.**
+
+Audit performed **3 November 2026**. The supplied brief is dated 27 October 2026. Source inspected: `Susurik/traccar-client-sdk`, local branch `work`, commit `0e0db40ea6d58df47523af00c72716dae8c91213`. This report documents an audit only. No CourierTax implementation, application-source changes, dependency upgrades, commits, pull requests, device installs, or store submissions were made.
+
+## 1. Executive summary
+
+The selected repository is the **correct SDK**, and both native location implementations are real. The iOS implementation is substantially more than a stub: it uses Core Location, motion detection, region monitoring, and background-task scheduling. Android uses Google Fused Location or Android LocationManager, a service/notification, and optional motion, geofence, heartbeat, and wake-lock components. **VERIFIED BY CODE.**
+
+However, this is primarily an **on-device tracker that uploads to a server**, not a ready-made offline mileage ledger. Its SQLite positions table is a retry queue: successful uploads delete points. React Native exposes control commands and diagnostic logs, but no raw-position subscription, route-history query, shift model, manual business-break API, or mileage total. **VERIFIED BY CODE.**
+
+For CourierTax, the decisive answers are:
+
+| Requirement | Finding | Evidence level |
+|---|---|---|
+| Real native iOS and Android tracking code | Yes, on both platforms. | VERIFIED BY CODE |
+| Two-hour background tracking while locked, using courier/navigation apps and receiving calls | Plausible architecture, but **not demonstrated** on either physical platform in this audit. | INFERRED / UNKNOWN |
+| Survive temporary internet loss without deleting already committed queued points | Buffered path persists accepted fixes before upload and waits/retries. Acquisition, disk-full, crash, and locked-device durability still need device tests. | VERIFIED BY CODE; actual device behavior UNKNOWN |
+| Fully local GPS routes and mileage, with no Traccar server | **YES WITH CHANGES.** No server is inherently needed by the native GPS APIs, but the current SDK needs a supported local-recording/storage interface and an upload-disabled mode. | VERIFIED BY CODE for current gaps; proposed design INFERRED |
+| Commercial React Native/Expo app | Legally and technically plausible with obligations, native integration work, and physical validation. Expo Go cannot host this custom native module. | CODE / DOCUMENTED ONLY / INFERRED |
+| Drop-in iOS React Native installation | A material CocoaPods packaging gap was found; no signed iOS host build was executed to confirm its exact failure mode. | VERIFIED BY CODE/package inspection; build consequence INFERRED |
+| Production reliability | **UNPROVEN.** Relevant upstream bug reports remain open, including an iOS stationary-resume failure mechanism still visible in this revision. | External reports + CODE; no reproduced device failure here |
+
+**Practical recommendation:** build a fresh CourierTax React Native/Expo application, keeping the GPS engine behind a small interface. First compare a serverless Expo Location/TaskManager baseline with a bounded Traccar-engine prototype. A commercially supported background-location module is another candidate if its licence cost is acceptable. Do not fork the full Traccar app or Comma simply because they contain existing screens. Do not start tax, subscription, or bookkeeping implementation until the GPS experiment meets the acceptance criteria below.
+
+### Evidence vocabulary
+
+- **VERIFIED BY CODE**: directly present in the checked source, package contents, schema, or identified dependency source. This proves implementation, not delivery under mobile OS conditions.
+- **VERIFIED BY EXECUTED TEST**: a command actually ran and completed here. The checks below are Linux build/static-analysis/package checks, not physical GPS tests.
+- **DOCUMENTED ONLY**: stated by official documentation or an upstream issue/release, without our executing that behavior. Issue reports are user reports, not independent confirmation.
+- **INFERRED**: a consequence or proposed design derived from the evidence, still needing a focused experiment.
+- **UNKNOWN**: evidence unavailable, incomplete, or requiring a real app/device/account.
+
+Source links below are pinned to the checked commit. Appendix A expands the cited source paths. External current-source documents were inspected on the audit date and can change later.
+
+## 2. Exact repository, upstream, release status, and layout
+
+| Item | Observed value |
+|---|---|
+| Configured Git remote | `origin = https://github.com/Susurik/traccar-client-sdk.git`; no separate `upstream` remote is configured. |
+| Actual local branch | `work`, not `main`; the originally selected repository ref was `main`. |
+| Checked HEAD | `0e0db40ea6d58df47523af00c72716dae8c91213` |
+| HEAD subject/date | `Release 1.1.3`; author and committer time `2026-10-16T14:22:57Z`. This is the checkout's last commit, not proof of the upstream project's latest update. |
+| Local history | 166 commits; repository is not shallow; no local tags. |
+| Starting worktree status | Clean, including no untracked files inside the SDK checkout. |
+| Upstream identity | GitHub's fork page identifies `traccar/traccar-client-sdk`; README, package metadata, Maven SCM, and podspec agree. |
+| Upstream release relation | Upstream `v1.1.3` is `a297767642e98193eb7939cbb4d54c101ff23610`, whose sole parent is this checked HEAD. The extra release-tag commit changes `Package.swift` from a local XCFramework path to the released URL/checksum. This explains the different tag SHA. |
+| Newer upstream state observed | Upstream main `e56ca0840656e785629d7d3d2b0b275a6c110489`; `v1.1.4` tag `dc51aaec2c264edf0f9d74bdb99dc6e2feab5a5b`, published 28 October 2026. Neither was checked out or substituted for this audit. |
+| SDK licence | Apache License 2.0, copyright notice naming Anton Tananaev. |
+
+Identity/release evidence: [fork](https://github.com/Susurik/traccar-client-sdk), [checked commit](https://github.com/Susurik/traccar-client-sdk/commit/0e0db40ea6d58df47523af00c72716dae8c91213), [v1.1.3 release-only commit](https://github.com/traccar/traccar-client-sdk/commit/a297767642e98193eb7939cbb4d54c101ff23610), [v1.1.4](https://github.com/traccar/traccar-client-sdk/releases/tag/v1.1.4), and [release.yml:63–83](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/.github/workflows/release.yml#L63-L83). Local metadata and read-only remote requests are recorded in Appendix B.
+
+| Directory/file | What it contributes |
+|---|---|
+| `core/src/commonMain/` | Kotlin shared engine, filtering, persisted state/config, SQLDelight schemas, retry queue, HTTP uploader. |
+| `core/src/androidMain/` | Location providers, permissions activity, foreground service, boot startup, motion/geofencing/heartbeat/battery/network. |
+| `core/src/iosMain/` | Kotlin/Native Core Location, motion, regions, background heartbeat, battery/network. |
+| `core/Sources/TraccarClientAutoInit/` | Separate Objective-C iOS launch/initialization hook. |
+| `react-native/` | TypeScript API, Kotlin Android bridge, Swift/Objective-C iOS bridge, npm/CocoaPods packaging. |
+| `flutter/` | Dart and native Flutter bindings. Its existence does not establish RN/Expo correctness. |
+| `samples/android/`, `samples/ios/` | Native examples, not a complete Expo courier app. |
+| `Package.swift` | Local development XCFramework reference; iOS 15 minimum in this package. |
+| `.github/workflows/release.yml` | Publishing workflow. No checked-in device-test or background-route regression suite was found. |
+
+This is **not** `traccar/traccar-client` (the complete tracking application) or `traccar/traccar` (the server). The SDK is the relevant extraction boundary for a new app. The full client includes an existing product/UI and lifecycle assumptions that would need replacing; the server processes remote tracking data and is not a mobile GPS library. Their licences were checked separately in section 8 rather than assumed identical.
+
+## 3. Checks actually executed
+
+All commands used the existing prepared Linux environment and existing checkout. No invasive installation was needed. Commands and results are expanded in Appendix B.
+
+| Check | Actual outcome | What it does **not** establish |
+|---|---|---|
+| `java -version`, `javac -version`, `node --version` after sourcing the environment helper | PASS: Temurin JDK 21.0.13; Node 24.19.0. | iOS toolchain availability. |
+| `./gradlew :samples:android:assembleDebug --no-daemon --max-workers=3 --console=plain` | PASS, exit 0, 13 seconds; 53 actionable tasks, 1 executed and 52 up-to-date. This was an incremental check reusing valid existing outputs, not a clean rebuild. | Installation, foreground-service operation, permissions, GPS, or battery behavior. |
+| Android `apksigner verify` on the generated debug APK | PASS, exit 0. | Production signing or Play approval. |
+| `(cd react-native && npm run prepare)` | PASS: JavaScript module and TypeScript declarations generated. | Native Android/iOS bridge compilation inside a React Native host app. |
+| `(cd react-native && npm run typecheck)` | PASS, exit 0. | Runtime module linking/New Architecture compatibility. |
+| `(cd flutter && flutter analyze --no-pub)` | PASS: “No issues found!”, exit 0. | Flutter native device tracking or an Expo build. |
+| npm package content inspection and registry archive integrity check | PASS; the 1.1.3 archive has 17 files, no vendored XCFramework and no LICENSE text. | A signed iOS build; see the packaging defect below. |
+| Git tracked-source/dependency/lockfile diff | Unchanged throughout the audit; only this report is added in the checkout. | Anything about future app behavior. |
+
+The Gradle output reports disabled iOS simulator test targets on Linux and a nonfatal metrics-directory warning, plus Gradle-10 deprecations. No checked-in test files were found. **No automated route/device tests ran, and no zero-test task is counted as validation.** No iOS compilation, Xcode execution, simulator test, phone call, physical GPS route, offline mobile run, two-hour lock test, EAS build, or store submission was performed.
+
+## 4. How tracking and persistence actually work
+
+### 4.1 Shared pipeline and server dependency
+
+**VERIFIED BY CODE.** The basic path is native location callback → in-memory flow → shared filter/battery processing → SQLite queue when `buffer=true` → HTTP upload → delete queued row after a successful HTTP status. The engine's uploader is unconditionally bound to `HttpUploader`; there is no local-only configuration option. [CoreModule.kt:8–28](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/CoreModule.kt#L8-L28) [TrackerEngine.kt:72–108](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L72-L108) [DatabaseQueue.kt:16–56](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt#L16-L56)
+
+`Config` requires `serverUrl` and `deviceId`, but `Tracker.start()` only enables persisted state; it does not require a successful server handshake. Therefore **a working server is not required to begin acquiring/queuing locations**. That is different from a supported, complete serverless mode. A blank or deliberately unreachable URL merely causes failed upload attempts and a growing queue; it is not a sound CourierTax design. `buffer=false` attempts direct upload and discards failures, so it is not an offline-first switch. [Config.kt:6–15](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Config.kt#L6-L15) [Tracker.kt:24–27](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L24-L27) [TrackerEngine.kt:79–108](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L79-L108)
+
+**VERIFIED BY CODE.** Buffered failures back off from 5 seconds to a maximum of 5 minutes; an offline network monitor makes the uploader wait for connectivity. Every HTTP 2xx response is considered success. The queue is FIFO and deletes the oldest row on success. [TrackerEngine.kt:28–29](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L28-L29) [TrackerEngine.kt:89–108](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L89-L108) [HttpUploader.kt:16–39](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt#L16-L39) [Position.sq:18–26](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq#L18-L26)
+
+**INFERRED risks:** an indefinitely failing head item can block later uploads; a lost success response can cause duplicate server submissions; there is no end-to-end idempotency identifier/acknowledged route protocol. Network “online” does not prove the server is reachable. Retries stop when the OS suspends/kills the app; this is not an independent background daemon.
+
+### 4.2 What is stored, where, and for how long
+
+| Item | Actual implementation | Classification |
+|---|---|---|
+| Queue/database | SQLDelight over SQLite, filename `tracker.db`, on both platforms. | VERIFIED BY CODE: [PlatformModule.kt:14–19](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt#L14-L19), [PlatformModule.kt:11–15](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/PlatformModule.kt#L11-L15) |
+| Android location | App-private Android database directory, normally `<app data>/databases/tracker.db`; actual device path/container not inspected. | CODE/dependency behavior; device path UNKNOWN |
+| iOS location | Default NativeSqliteDriver → SQLiter path is `<app sandbox>/Library/Application Support/databases/tracker.db`. Verified from exact native-driver 2.4.0 and SQLiter 1.3.3 sources; actual container UUID/file not inspected. | VERIFIED BY CODE/dependency source |
+| Point columns | Row ID, latitude, longitude, horizontal accuracy, time, altitude, speed, bearing, battery, charging. | VERIFIED BY CODE: [Position.sq:1–16](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq#L1-L16) |
+| Config and state | Singleton JSON rows; state has `enabled`, automatic `paused`, and last accepted position. | VERIFIED BY CODE: [Config.sq:1–13](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/sqldelight/org/traccar/client/db/Config.sq#L1-L13), [State.sq:1–13](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/sqldelight/org/traccar/client/db/State.sq#L1-L13), [State.kt:6–10](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/State.kt#L6-L10) |
+| Historical route | No permanent history table, shift ID, segment ID, route-query API, odometer, or mileage accumulator. Success removes queue points. | VERIFIED BY CODE: schemas and [PositionQueue.kt:3–7](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/PositionQueue.kt#L3-L7) |
+| Alarm/motion/heartbeat | `Position` has an optional alarm and a transient heartbeat marker, but the queue schema does not persist these; per-point motion/confidence is not stored. One-shot alarms bypass the queue. | VERIFIED BY CODE: [Position.kt:6–19](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Position.kt#L6-L19), [DatabaseQueue.kt:19–46](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt#L19-L46), [Tracker.kt:34–42](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L34-L42) |
+| Retention | No queue size/age cap is defined here. Diagnostic logs are trimmed to 5,000 rows. Last accepted coordinates remain in state after stop. | VERIFIED BY CODE: [Log.kt:14–24](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Log.kt#L14-L24), [Tracker.kt:29–32](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L29-L32), [State.kt:6–10](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/State.kt#L6-L10) |
+
+Exact iOS default-path source: [native-driver 2.4.0 sources](https://repo.maven.apache.org/maven2/app/cash/sqldelight/native-driver/2.4.0/native-driver-2.4.0-sources.jar), `nativeMain/app/cash/sqldelight/driver/native/NativeSqlDatabase.kt:125–140`; [SQLiter 1.3.3 sources](https://repo.maven.apache.org/maven2/co/touchlab/sqliter-driver/1.3.3/sqliter-driver-1.3.3-sources.jar), `nativeCommonMain/co/touchlab/sqliter/DatabaseConfiguration.kt:45–50,63–66` and `appleMain/co/touchlab/sqliter/DatabaseFileContext.kt:36–53`. These archives were inspected, not executed or installed.
+
+Native fixes retain location timestamps in epoch milliseconds; speed is retained internally and converted to knots only for the Traccar HTTP upload. Battery/motion facilities help tracking but are not a working-time ledger. [HttpUploader.kt:20–30](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt#L20-L30) [HttpUploader.kt:42](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt#L42) [IosLocationSource.kt:189–200](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L189-L200) [FusedLocationSource.kt:130–140](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt#L130-L140)
+
+**Important durability boundary — VERIFIED BY CODE / INFERRED:** provider callbacks place positions into a `MutableSharedFlow` with a small extra buffer and ignore `tryEmit` failure. The disk insert occurs asynchronously later. A callback is not proof of a committed point. Filtering can intentionally discard a fix; process death or overflow can lose a not-yet-committed fix. The filter also saves `lastAcceptedLocation` before the queue insert, without a shared transaction. A crash between those operations can leave state advanced without the queued point. [IosLocationSource.kt:39–67](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L39-L67) [FusedLocationSource.kt:34–89](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt#L34-L89) [LocationFilter.kt:54–56](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt#L54-L56) [TrackerEngine.kt:73–82](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L73-L82)
+
+Already committed queue rows are not intentionally deleted just because internet disappears. However, storage-full errors, app-data clearing/uninstallation, failed migrations, file-protection access while locked, and abrupt power loss were not tested. There is no visible queue write-error recovery/health event exposed to RN. The brief's promise about preserving recorded data must be defined at the durable transaction boundary, then tested on both phones.
+
+### 4.3 Filtering and business-distance accuracy
+
+**VERIFIED BY CODE.** The shared filter accepts a first fix, the first fix after a native stationary-state change, or a positive time **or** distance **or** bearing-change threshold. Its Haversine function only compares two positions for filtering; it does **not** sum travelled distance. There is no specific rejection for poor/negative accuracy, implausible speed, large jumps, stale/duplicate timestamps, tunnelling, or map matching. [LocationFilter.kt:20–76](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt#L20-L76)
+
+Defaults are medium accuracy, 75 m distance, 300 s interval, angle disabled, automatic stop detection enabled, 60 s stop timeout, 100 m stationary radius, heartbeat disabled. Provider-effective settings prefer the distance trigger over interval, and HIGHEST removes native distance/interval constraints. The shared filter still uses the original config. Setting all three shared thresholds to zero does **not** mean “save everything”: after the first point, ordinary fixes have no acceptance trigger. [Config.kt:24–47](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Config.kt#L24-L47) [LocationFilter.kt:16–48](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt#L16-L48)
+
+**INFERRED:** those defaults suit periodic position reporting more than dense courier routes. Sparse points cut corners; GPS drift and jumps add false distance; no GPS means the route through a tunnel is unknown. Automatically stationary is not the same as a work break. Preserve quality flags and interruption gaps rather than silently joining far-apart points or reporting estimated tunnel distance as measured GPS distance. Battery and distance tradeoffs must be measured for walking, cycling, scooters, and cars; no consumption/error figures were measured here.
+
+### 4.4 Start, pause, stop, recovery, and off-shift safety
+
+**VERIFIED BY CODE.** `start()` sets `enabled=true`; `stop()` sets `enabled=false, paused=false`. Automatic stationary signals toggle `paused` while enabled. The public API does not expose a manual shift/break state machine. `isTracking()` reports a persisted logical flag, not confirmation of live GPS or correct permission. [Tracker.kt:22–32](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L22-L32) [TrackerEngine.kt:49–61](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L49-L61) [Component.kt:23–29](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Component.kt#L23-L29) [index.tsx:110–147](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/src/index.tsx#L110-L147)
+
+Stop also preserves the filter's last accepted location. A new shift's first fix can therefore be compared with the previous shift and filtered rather than accepted immediately; reset or reconcile that history at the shift boundary. **VERIFIED BY CODE / INFERRED consequence:** [LocationFilter.kt:16–44](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt#L16-L44) [Tracker.kt:29–32](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L29-L32).
+
+CourierTax must own explicit shift and segment records. A user pause must remain paused until the user resumes; it must not automatically resume because the device moves. Stop/start can be used as recorder controls in a prototype, but require a separate manual-break ledger and a tested restart boundary. Do not count a queue-waiting/upload period as working time.
+
+Two easily missed exceptions matter:
+
+1. `requestPosition()` works independently of start/stop and directly fetches/uploads a fix. It is not buffered and returns upload success, not a raw GPS point. CourierTax must gate or remove this off-shift route. **VERIFIED BY CODE:** [Tracker.kt:34–42](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L34-L42), [index.tsx:124–132](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/src/index.tsx#L124-L132).
+2. The upload loop is not gated by `enabled`; old recorded points may upload after stop. That is not new GPS collection, but is a separate consent/retention/networking decision. Stop also does not delete points, logs, config, or the last-location state. **VERIFIED BY CODE:** [TrackerEngine.kt:89–108](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L89-L108), [Tracker.kt:29–47](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L29-L47).
+
+State/config persistence makes restoration possible after a permitted process launch. It does not force the OS to relaunch the app or reconstruct coordinates never captured. There is also an **INFERRED** concurrent-state-write ordering risk: the in-memory state update is atomic, but separate asynchronous JSON saves are not serialized together. A filtering update and start/stop can persist out of order. This race was not reproduced; it deserves a focused recovery test because the requirement forbids unintended tracking. [StateStore.kt:22–26](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/StateStore.kt#L22-L26)
+
+## 5. Android implementation
+
+### 5.1 APIs, service, and ordinary background operation
+
+**VERIFIED BY CODE.** The platform module chooses Google Fused Location when Play Services is available and platform providers are not preferred; otherwise it uses `LocationManager`. Both produce shared `Position` records. Location mode follows disabled/active/automatic-stationary state. [PlatformModule.kt:21–32](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt#L21-L32) [FusedLocationSource.kt:32–89](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt#L32-L89) [AndroidLocationSource.kt:29–83](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/AndroidLocationSource.kt#L29-L83)
+
+**VERIFIED BY CODE.** An enabled-state observer starts `TrackerService`; the manifest declares the location foreground-service type and location/foreground-service-related permissions. The service uses a visible low-importance tracking notification when it takes the foreground-service path, and is sticky. Optional wake locks are held only while enabled and not automatically paused. [AndroidManifest.xml:1–42](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/AndroidManifest.xml#L1-L42) [ForegroundServiceHolder.kt:29–127](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt#L29-L127) [WakeLockHolder.kt:22–42](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/WakeLockHolder.kt#L22-L42)
+
+**INFERRED / UNKNOWN.** This architecture can support a user-started shift while locked or using Maps/Wolt/Bolt. It is not proof against Doze, OEM task killers, thermal conditions, task-manager Stop, permission revocation, or service-start restrictions. The source has no general solution that exempts it from newer Android restrictions. There is no verified two-hour result.
+
+### 5.2 Permissions and service risks to resolve
+
+- **VERIFIED BY CODE:** runtime permission code requests fine location and, on relevant Android versions, background location; it also requests motion/notification permission and attempts a battery-optimization exemption flow. The app should give a courier-specific explanation and handle denial instead of relying on these dialogs as a complete UX. [PermissionActivity.kt:12–48](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/PermissionActivity.kt#L12-L48) [Permissions.kt:10–35](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/Permissions.kt#L10-L35) [TrackerExtensions.kt:8–40](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/TrackerExtensions.kt#L8-L40)
+- **VERIFIED BY CODE / INFERRED risk:** the manifest/request does not pair coarse location with fine location. Modern precise/approximate permission flows must be tested on the target OSes; source presence alone does not prove a valid grant flow.
+- **VERIFIED BY CODE / INFERRED risk:** if notification permission is denied on Android 13+, the holder chooses `startService` instead of `startForegroundService`, and the service skips foreground promotion. A denial of notification permission must not be treated as permission to run an unrestricted ordinary background service. This branch may undermine the long-lived tracking contract; `enabled=true` can still be set. The exact observed failure depends on OS/app state and was not device-tested. [ForegroundServiceHolder.kt:39–47](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt#L39-L47) [ForegroundServiceHolder.kt:84–98](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt#L84-L98)
+- **VERIFIED BY CODE / INFERRED risk:** permission result handling does not make notification/motion/battery-exemption success a prerequisite for reporting the tracker enabled. Fused location registration tasks are not awaited with a surfaced failure result. A truthful recorder-health/error API is missing. [PermissionActivity.kt:12–25](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/PermissionActivity.kt#L12-L25) [FusedLocationSource.kt:78–89](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt#L78-L89)
+- **DOCUMENTED ONLY / needs target-specific verification:** foreground starts while visible, background-location settings grants, location service types/permissions, while-in-use restrictions on background service starts, boot exceptions, and foreground-service notification behavior differ by Android release. Direct current Android policy pages were denied by the proxy; links and that retrieval limit are recorded in section 9/Appendix B. Do not interpret a manifest declaration as compliance proof.
+
+### 5.3 Motion, battery, boot, and data preservation
+
+**VERIFIED BY CODE.** Activity-recognition and geofence signals implement automatic stationary stop/resume; heartbeat alarms operate while enabled and stationary. These reduce continuous GPS use in some conditions, but are not a guarantee of prompt departure detection. Optional wake locks trade battery for wakefulness and do not override permission/service restrictions. [PlatformModule.kt:35–54](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt#L35-L54) [ActivityRecognitionDetector.kt:130–187](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/ActivityRecognitionDetector.kt#L130-L187) [GeofenceDetector.kt:42–85](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/GeofenceDetector.kt#L42-L85) [AlarmHeartbeatTrigger.kt:29–74](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/AlarmHeartbeatTrigger.kt#L29-L74)
+
+**VERIFIED BY CODE / INFERRED:** the boot/package-update receiver and service reconstruct from persisted config/state. The Android startup provider initializes application context and the notification channel; it does not itself restore the tracker. A previously enabled tracker may resume in eligible conditions; a disabled tracker is not intended to begin a new session. Force-stop is different from swiping Recents, a crash, OS memory reclamation, or reboot; OEM behavior also differs. No guaranteed restart after all of these can be claimed. Inspect startup, service-start failures, and the restored shift intent on real devices. [BootReceiver.kt:11–24](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/BootReceiver.kt#L11-L24) [TrackerStartup.kt:12–16](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/androidMain/kotlin/org/traccar/client/TrackerStartup.kt#L12-L16) [Tracker.kt:59–91](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L59-L91)
+
+The Android sample initializes with default demo config in its `Application`. The configuration-taking bootstrap saves passed config rather than loading persisted config on a fresh singleton. **INFERRED:** sample behavior can overwrite edited endpoint/device values after a fresh process unless its startup is adapted. Do not treat the sample as a finished persisted-settings app. [SampleApp.kt:34–46](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/android/src/main/java/org/traccar/client/sample/SampleApp.kt#L34-L46) [Tracker.kt:66–74](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L66-L74)
+
+Buffered points use the same shared SQLite path described above. A connectivity outage does not require GPS shutdown, but a low-memory kill prevents callbacks until a permitted restart. Android's acquisition buffers are not a durable log. Battery savings, precise distance, and successful boot/update recovery all remain **UNKNOWN** on physical devices.
+
+## 6. iOS implementation
+
+### 6.1 Implemented native code and permission flow
+
+**VERIFIED BY CODE.** `IosLocationSource` creates `CLLocationManager`, enables `allowsBackgroundLocationUpdates`, disables automatic location pausing, and starts standard updates **and** significant-location-change monitoring while active. It uses a native delegate to convert fixes into shared positions. This is real iOS code written in Kotlin/Native, not a Swift stub. [IosLocationSource.kt:56–115](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L56-L115) [IosLocationSource.kt:189–200](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L189-L200)
+
+**INFERRED / UNKNOWN:** those flags are suitable building blocks for screen-lock/app-switch tracking, but do not prove uninterrupted execution or callback delivery. iOS controls suspension, background execution and relaunch eligibility. A user force-quit is not the same as an OS memory kill. No claim of guaranteed force-quit tracking is justified.
+
+**VERIFIED BY CODE.** On undetermined permission it requests Always, but treats both Always and When In Use as authorized. If permission is already When In Use, this path does not request an Always upgrade. Region monitoring explicitly requires Always. Reduced-accuracy inspection, temporary full-accuracy requests, a staged permission/upgrade UX and public permission-health events are not implemented here. [IosLocationSource.kt:74–109](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L74-L109) [RegionDetector.kt:76–80](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/RegionDetector.kt#L76-L80)
+
+The native sample declares When In Use/Always purpose strings, motion purpose text, `location` and `fetch` background modes, and permitted heartbeat task ID. The consuming CourierTax app must supply its own declarations and clear purpose text. Do not assume a framework supplies host-app Info.plist permissions. [Info.plist:5–35](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/ios/TraccarClientSample/Info.plist#L5-L35) [project.yml:18–25](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/ios/project.yml#L18-L25)
+
+### 6.2 Stationary and lifecycle weaknesses
+
+**VERIFIED BY CODE.** MotionActivityDetector uses Core Motion; stationary arms a timer, while walking/running/automotive/cycling emits a departure signal. Confidence is not used to filter that decision. On stationary transition the location source requests a final fix, then stops **both** standard updates and significant-change monitoring. RegionDetector waits for a fresh anchor, falls back to the persisted last accepted location, and registers an exit-only region. It does not request the current region state. [MotionActivityDetector.kt:32–71](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/MotionActivityDetector.kt#L32-L71) [IosLocationSource.kt:118–138](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt#L118-L138) [RegionDetector.kt:43–109](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/RegionDetector.kt#L43-L109)
+
+**INFERRED risk, also matching an open upstream report:** after relaunch while stationary, the saved region anchor can be stale and the courier already outside it. Waiting only for a future exit can fail to resume. Significant-change monitoring is not a continuous fallback while stationary because it has been stopped. The current checked source retains this mechanism; the physical failure was not reproduced here. Short departures within a 100 m radius and lack of Always/motion permission need explicit testing.
+
+**VERIFIED BY CODE.** The native Swift Package product contains a separate Objective-C AutoInit target. Its `+load` launch observer registers the background-heartbeat handler and calls no-argument `sharedTracker()` to restore persisted state. The RN podspec includes only the RN `ios/` source files plus a vendored Kotlin XCFramework; it does **not** include that separate AutoInit source. RN Swift methods contain no equivalent launch/heartbeat-registration hook. [Package.swift:9–23](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/Package.swift#L9-L23) [TraccarClientAutoInit.m:10–19](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/Sources/TraccarClientAutoInit/TraccarClientAutoInit.m#L10-L19) [react-native-traccar-client-sdk.podspec:16–18](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/react-native-traccar-client-sdk.podspec#L16-L18)
+
+**INFERRED / UNKNOWN:** RN cold-background-launch restoration and early BGTask registration therefore cannot be assumed equivalent to the native sample. JS initialization on a normal foreground launch is not sufficient proof of a background relaunch path. The released XCFramework was not binary-audited or run; verify the exact consumer package and native launch integration.
+
+### 6.3 Background heartbeat and persistence
+
+**VERIFIED BY CODE.** Heartbeat uses `BGAppRefreshTaskRequest.earliestBeginDate`, only while enabled and stationary. **DOCUMENTED ONLY / INFERRED platform constraint:** an earliest date is not a guaranteed periodic timer. Its task handler signals asynchronous work and immediately marks completion; the GPS fetch/filter/queue commit runs in a separate pipeline and is not awaited before task completion. **INFERRED:** suspension after completion can interrupt the intended work before a durable point is stored. [IosBackgroundHeartbeat.kt:26–76](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/iosMain/kotlin/org/traccar/client/IosBackgroundHeartbeat.kt#L26-L76) [TrackerEngine.kt:63–82](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt#L63-L82)
+
+**UNKNOWN:** actual two-hour callback continuity, Always upgrade UX, recording while locked under the host app's file-protection settings, low-power behavior, reboot/first-unlock recovery, app-update restoration, and calls/competing apps. The code provides implementation evidence, not reliability evidence. A configuration with automatic stop detection disabled is a useful POC baseline, but it changes battery behavior and does not fix permissions, RN packaging, or lifecycle issues.
+
+## 7. Offline-first verdict and precise changes needed
+
+### Verdict: YES WITH CHANGES; unmodified supported local-only usage is not established
+
+The operating systems can provide location without a Traccar server. This SDK already contains reusable acquisition and SQLite machinery. However, CourierTax cannot safely treat the upload queue or diagnostic text as a route database. An unreachable URL, no-op uploader, or logs-parsing workaround does not meet the requirement.
+
+| Proposed change, not implemented | Why it is needed | Approximate scope |
+|---|---|---|
+| Add an explicit `LOCAL_ONLY` recorder mode; do not construct/run the HTTP synchronization path in that mode. Make endpoint/device config optional or separate for upload use. | Prevent unwanted network calls, fake endpoints, retry storms, and deletion-as-ack semantics. Changing only the JS wrapper cannot change the native engine's binding. | MEDIUM, native shared-core API change |
+| Add a durable route journal with shift ID, segment ID, stable point ID, timestamps, quality data and monotonic session bookkeeping. Keep upload status separate from route retention. | History must survive successful uploads, app relaunch and no network; business distance must not connect separate shifts or breaks. | MEDIUM–HIGH |
+| Commit points natively before notifying JS; expose paginated history/cursor reads, recorder-health/error/status events, export and deletion. Events supplement durable queries. | JS can suspend/crash; event-only listeners lose data. RN needs access without probing a private DB or parsing logs. | MEDIUM–HIGH |
+| Make shift start/pause/resume/stop durable, serialized and distinct from automatic stationary power management. Gate all one-shot APIs. | Explicit user intent, no off-shift tracking, no movement-triggered resumption of a manual break. | MEDIUM–HIGH |
+| Implement/test mileage and work-time calculation with accuracy/outlier/age rules, segment boundaries and recorded uncertainty. | Haversine between arbitrary retained points is not a complete business-distance algorithm. | MEDIUM–HIGH |
+| Repair/verify RN iOS packaging, native early lifecycle registration and chosen Android permission/FGS behavior. | The app must actually build and remain in the permitted tracking state. | MEDIUM–HIGH; device-dependent unknowns |
+| Add migration, bounded storage, disk-error handling, backup/protection policy and transactional recovery. | Committed data preservation and truthful recovery cannot depend on best-effort flows alone. | MEDIUM–HIGH |
+
+These are targeted changes compared with building two acquisition stacks from scratch, but **more than a cosmetic wrapper**. `CoreModule` hard-wires its private composition; although `Uploader` and `PositionQueue` are interfaces, the public `sharedTracker(config)` API does not provide dependency injection for a consumer-supplied local store. A small lawful native fork or an upstream extension is needed. [CoreModule.kt:8–28](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/CoreModule.kt#L8-L28) [Uploader.kt:3–5](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Uploader.kt#L3-L5) [PositionQueue.kt:3–7](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/PositionQueue.kt#L3-L7) [Tracker.kt:66–91](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L66-L91)
+
+For local mileage, store source time in UTC and use elapsed/monotonic time for active-duration intervals; present Latvia time using `Europe/Riga`, including daylight-saving transitions. Do not derive payroll/tax work time from upload arrival or a fixed assumption that all adjacent points belong to one trip. Tax estimates, MUN/general-regime rules, VSAOI/IIN, subscriptions, accounting retention and report requirements need separate domain validation; this audit does not verify Latvian tax compliance.
+
+Avoiding a Traccar server does not remove Apache obligations or mobile OS restrictions. It reduces exposure of routes to a remote operator and removes a tracking-backend dependency/cost, but transfers backup, device-loss protection, storage, export and recovery responsibility to CourierTax. Optional cloud backup, account systems, subscriptions, build services, map tiles, and store memberships can still have costs. Offline GPS does not imply offline map availability.
+
+## 8. Licensing, privacy, security, and distribution
+
+### 8.1 Licence checks and commercial reuse
+
+**VERIFIED BY CODE/licence text:** the SDK is Apache-2.0. It permits commercial use, modification and redistribution, including incorporation in a proprietary app, subject to its conditions. It does not require publishing CourierTax's source merely for linking or distributing the SDK. Redistribute the licence; retain applicable copyright/attribution notices; identify modified files; carry applicable NOTICE content if the distributed work includes one. The root checked tree has no NOTICE file. The licence does not grant Traccar trademarks or provide a reliability warranty. [LICENSE:1–201](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/LICENSE#L1-L201)
+
+The full client and server were independently checked at their upstream licence paths: [client LICENSE.txt](https://github.com/traccar/traccar-client/blob/master/LICENSE.txt), [server LICENSE.txt](https://github.com/traccar/traccar/blob/master/LICENSE.txt). Both retrieved texts are also Apache-2.0. This is not a complete dependency/assets licence audit of either whole app, nor evidence their functionality is appropriate for CourierTax.
+
+Important dependency declarations were checked against their actual cached POMs or installed package licence files:
+
+| Dependency family/version inspected | Declared licence/result |
+|---|---|
+| Kotlin 2.4.20; coroutines 1.11.0; serialization 1.11.0 | Apache-2.0 |
+| Ktor core/Android/Darwin 3.6.0 | Apache-2.0 |
+| SQLDelight runtime/Android/native drivers 2.4.0; SQLiter driver 1.3.3 | Apache-2.0 |
+| Koin 4.2.2; AndroidX Activity 1.13.0 | Apache-2.0 |
+| React 19.3.0; React Native 0.87.1 | MIT; preserve their required notices. |
+| Google Play Services Location 21.4.0 | POM declares **Android Software Development Kit License**; do not describe all required dependencies as Apache/MIT. Google distribution/usage terms need review. |
+
+This checks important dependencies, not every transitive library, build tool, future Expo plugin, map provider, or app-store contract. A final release needs its own dependency/notice inventory. Selecting `preferPlatformProviders=true` changes runtime provider selection; it does not automatically remove the bundled Google dependency or its licence obligations.
+
+**VERIFIED BY PACKAGE INSPECTION:** the npm 1.1.3 archive has no LICENSE text despite `license: Apache-2.0` metadata. CourierTax must supply the SDK licence/appropriate notices itself; do not assume npm metadata or CocoaPods metadata fulfils redistribution duties. This is a packaging finding, not a claim that commercial reuse is forbidden.
+
+The exact Comma repository/revision was not supplied. Its MIT licence and seven-line iOS stub are **USER-SUPPLIED CONTEXT**, not independently verified in this audit. Verify the particular files/assets and retain MIT notices before reusing any bookkeeping code.
+
+### 8.2 Location security and privacy
+
+**VERIFIED BY CODE.** `tracker.db` uses default SQLite drivers; the SDK supplies no encryption key/SQLCipher configuration. Exact SQLiter defaults have no key/rekey configured. The OS app sandbox and device encryption/data protection still apply; “no SDK database encryption” does not mean every other app can read the file. Actual protection class, backup inclusion, root/jailbreak exposure, and writes while locked were not measured.
+
+The route is copied into more places than the queue: last accepted position in state, diagnostic logs (including rejected-coordinate messages), and any uploaded server data. Logs also include server URL and device ID. Stop is not deletion; `clearLogs()` only clears logs. [Tracker.kt:25–47](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Tracker.kt#L25-L47) [LocationFilter.kt:29–50](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt#L29-L50) [Log.kt:14–24](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/Log.kt#L14-L24)
+
+**VERIFIED BY CODE.** The uploader submits device ID, position/time/accuracy/altitude/speed/bearing/battery/charging and optional alarm to the configured URL. It does not enforce HTTPS in configuration or provide an application-authentication scheme in this revision. Use authenticated HTTPS if any upload is retained; do not put secret tokens in URLs that are logged. [HttpUploader.kt:16–39](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt#L16-L39)
+
+The SDK's inspected source has no separate hard-coded analytics/advertising destination. The **samples** default to `https://demo.traccar.org/` and device ID `123456`; do not record real couriers with those defaults. No packet capture, malicious-dependency analysis, or audit of proprietary Google Play Services internals was performed, so “no hidden calls anywhere” is **UNKNOWN**, not certified. [SampleApp.swift:4–5](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/ios/TraccarClientSample/SampleApp.swift#L4-L5) [SampleApp.kt:34–35](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/android/src/main/java/org/traccar/client/sample/SampleApp.kt#L34-L35)
+
+CourierTax should define and test: explicit start/stop consent and a persistent active-shift indication; manual-break behavior; no one-shot/off-shift acquisitions; local retention/deletion including state/logs/WAL files/backups; export and restore; who can access phone backups; minimal/redacted diagnostics; and how remote copies are deleted if cloud sync is added. Continuous precise courier location can expose home addresses and habits. Document a lawful basis, purpose limitation, retention and data-subject workflows, and assess whether a DPIA is needed. These are technical privacy tasks, not a Latvian legal opinion.
+
+### 8.3 Store review risks
+
+Commercial store distribution is **feasible in principle**, not pre-approved by Apache licensing or successful compilation. A courier explicitly starting a mileage shift has a plausible user-visible background-location purpose, but reviewers assess the shipped behavior and declarations.
+
+For Apple, use accurate location/motion purpose strings, appropriate background modes, explicit user-started tracking, truthful privacy labels and a working off switch. If data is transmitted, disclose the actual purposes and recipients. The RN privacy manifest's `NSPrivacyTracking=false` concerns Apple's cross-app tracking category; it does **not** mean the app collects no GPS data and cannot replace the host application's privacy assessment.
+
+For Google Play, verify background-location eligibility/disclosure/consent and declaration requirements, the location foreground-service type/permissions, target-SDK rules and demonstrations, Data Safety answers, and vendor/battery-exemption policies. Request only justified permissions; handle precise/approximate, notification and background denials visibly. Do not advertise guaranteed survival of force-stop/force-quit.
+
+Current direct Apple/Android policy-page retrieval was blocked (403), so those changing submission requirements were not freshly exhaustively verified. Official review starting points: [Apple guidelines](https://developer.apple.com/app-store/review/guidelines/), [Android foreground services](https://developer.android.com/develop/background-work/services/fgs), [Google Play background location](https://support.google.com/googleplay/android-developer/answer/9799150). Recheck their current requirements before submission. No store-account or review access was tested.
+
+## 9. React Native, Expo and iOS build feasibility
+
+### 9.1 Binding surface and maintenance
+
+**VERIFIED BY CODE.** The TypeScript exports are `init`, `setConfig`, `start`, `stop`, `requestPosition`, `isTracking`, `getLogs`, and `clearLogs`. Config includes endpoint/device ID; location accuracy/distance/interval/angle; automatic stop detection/timeout/radius/heartbeat; Android wake lock/provider preference; buffer and notification text. There is no raw-position/event subscription, retained-route query, recorder health/permission event, shift ID, distance total, manual pause/resume, or complete-delete method. [index.tsx:19–147](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/src/index.tsx#L19-L147)
+
+**VERIFIED BY CODE / DOCUMENTED ONLY.** A published RN package, release automation, recent history and an observed newer 1.1.4 release provide maintenance evidence. They do not establish long-term support or a background-location SLA. The binding uses legacy `NativeModules`/ReactContextBaseJavaModule/Objective-C bridge patterns, not a verified generated TurboModule contract. It may work through interoperability on a chosen RN version, but that was not tested inside a native host. React Native type checking alone cannot prove New Architecture compatibility.
+
+### 9.2 The fork's code is not automatically what RN ships
+
+**VERIFIED BY CODE.** The RN Android build depends on published `org.traccar:traccar-client-sdk:1.1.3`, not `project(":core")`. The iOS podspec downloads an upstream 1.1.3 XCFramework. Editing this fork's shared core would not automatically change either RN consumer engine. A future fork must deliberately connect its own native artifact/version or local build and verify what each app actually links. [build.gradle:44–50](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/android/build.gradle#L44-L50) [react-native-traccar-client-sdk.podspec:14–33](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/react-native-traccar-client-sdk.podspec#L14-L33)
+
+**Material iOS installation gap — VERIFIED BY CODE/package contents; build consequence INFERRED.** The podspec fetches its required XCFramework in `prepare_command`. Standard RN autolinking registers this package as a local `:path` pod. CocoaPods' official DSL states that `prepare_command` is **not run for path pods**. The inspected published npm 1.1.3 archive does not include the framework, while the podspec requires it as `vendored_frameworks`. Consequently a normal RN package install is liable to leave the required binary missing. This needs a supported binary-download/distribution arrangement or explicit documented native integration before claiming a working iOS consumer. Sources: [react-native-traccar-client-sdk.podspec:16–33](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/react-native-traccar-client-sdk.podspec#L16-L33); [CocoaPods Core DSL, prepare_command rule](https://github.com/CocoaPods/Core/blob/master/lib/cocoapods-core/specification/dsl.rb#L486-L504); installed RN autolinking source `react-native/node_modules/react-native/scripts/cocoapods/autolinking.rb:162–167`; integrity-verified npm archive inspection in Appendix B. No CocoaPods/Xcode execution was available to measure the exact failure. A manual unverified download is not a satisfactory release pipeline.
+
+The separate AutoInit omission described in section 6 is an additional lifecycle gap even after a binary is supplied. The root `Package.swift` references a locally built framework on main, while release tags replace it with a URL/checksum; choose the intended consumption path deliberately.
+
+### 9.3 Expo build model and version compatibility
+
+**DOCUMENTED ONLY:** an Expo development/release build can include custom native modules; bare React Native is not inherently mandatory. **Expo Go cannot load this SDK**, because it does not contain its Swift/Kotlin native code. No Expo config plugin is included in this SDK. A consumer must add durable app configuration/a config plugin for permissions, iOS background modes/task IDs and launch integration, and any required Android service/manifest behavior. Manual native project changes are possible if those projects are retained; repeated prebuild can overwrite manual changes unless represented in config/plugins.
+
+| Version/toolchain item | Checked evidence and limit |
+|---|---|
+| Shared native tools | Kotlin 2.4.20, AGP 9.4.1, Gradle wrapper 9.8.0; JDK 21 used successfully. [libs.versions.toml:1–14](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/gradle/libs.versions.toml#L1-L14) [gradle-wrapper.properties:1–10](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/gradle/wrapper/gradle-wrapper.properties#L1-L10) |
+| Android | Core min SDK 24; compile SDK 37; sample target SDK 37. A consumer's other packages/RN may impose higher minima or different toolchains. [build.gradle.kts:22–27](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/core/build.gradle.kts#L22-L27) [build.gradle.kts:6–22](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/samples/android/build.gradle.kts#L6-L22) |
+| iOS | Root SPM and RN podspec both declare iOS 15.0; installed development RN 0.87.1 itself requires iOS 15.1 (`react-native/node_modules/react-native/scripts/cocoapods/helpers.rb:83–88`). The chosen RN/Expo may raise it further. Swift-tools 5.9 in Package.swift is not the same as a verified Swift compiler compatibility matrix. [Package.swift:1–8](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/Package.swift#L1-L8) [react-native-traccar-client-sdk.podspec:10–18](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/react-native-traccar-client-sdk.podspec#L10-L18) |
+| RN wrapper development versions | RN 0.87.1, React 19.3.0, TypeScript 7.0.2 ranges/pins as declared; Node 24 workflow. Wildcard peer dependencies do not prove every version works. [package.json:27–49](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/react-native/package.json#L27-L49) |
+| Expo observed current metadata | Official npm Expo latest 58.0.22 package's integrity-checked metadata aligns with RN 0.88.1 and React 19.3.0, unlike this wrapper's RN 0.87.1 development pin. This is a version-alignment risk, not a demonstrated incompatibility or a reason to upgrade this audit checkout. |
+| Xcode/build images | Repository README asks for Xcode 26.6; official EAS infrastructure source lists an Xcode 26.6 image for the SDK-57 family. This does not establish compatibility with the observed Expo 58 package or its default image. This audit did not build with that image or verify binary ABI/SDK compatibility. [README.md:19–27](https://github.com/Susurik/traccar-client-sdk/blob/0e0db40ea6d58df47523af00c72716dae8c91213/README.md#L19-L27) |
+
+No exact supported Expo/RN/Swift/Xcode combination was validated for the Traccar consumer. Pin one coherent combination, include the real native binary/source, run both host builds, and record the actual resolved native versions. Do not combine the newest Expo/RN/AGP/Kotlin versions merely because each exists.
+
+### 9.4 Windows → hosted iOS build
+
+**DOCUMENTED ONLY / INFERRED:** a Windows developer can submit an iOS project to hosted EAS Build, where macOS/Xcode performs compilation. Windows does not need to run local Xcode for that flow. It needs an Expo account/project and access to the code/build service, plus Apple Developer Program membership and correct bundle ID, signing certificate and provisioning profile for App Store distribution. EAS can manage signing credentials or use supplied ones. Physical-device/ad-hoc testing requires the appropriate device provisioning; iOS Developer Mode may be required for development builds. A Mac/iPhone remains useful for native debugging; a Windows-only local `eas build --local` iOS workflow is not provided by hosted-build feasibility.
+
+No Apple/EAS credentials were requested, no signing material was read, and no build was submitted. Cloud-build service availability/cost and exact account entitlements remain outside this audit.
+
+Official documentation source references: [development builds](https://github.com/expo/expo/blob/main/docs/pages/develop/development-builds/introduction.mdx), [Expo Go FAQ](https://github.com/expo/expo/blob/main/docs/pages/develop/development-builds/faq.mdx), [config plugins](https://github.com/expo/expo/blob/main/docs/pages/config-plugins/introduction.mdx), [EAS infrastructure](https://github.com/expo/expo/blob/main/docs/pages/build-reference/infrastructure.mdx), [signing](https://github.com/expo/expo/blob/main/docs/pages/app-signing/app-credentials.mdx), [iPhone development builds](https://github.com/expo/expo/blob/main/docs/pages/tutorial/eas/ios-development-build-for-devices.mdx), [local-build limits](https://github.com/expo/expo/blob/main/docs/pages/build-reference/local-builds.mdx). The documentation websites were denied by the proxy; these official GitHub source documents were readable.
+
+## 10. Known issues, history and missing features
+
+The issue tracker was partly accessible through GitHub web pages/embedded data even though GitHub API requests were denied. This is a targeted review, not an exhaustive issue/security search. A report remaining open is not proof of an unfixed reproducible bug in every later binary. Conversely, a release number is not proof it was fixed.
+
+| Evidence | Assessment at checked revision |
+|---|---|
+| [#25: iOS stationary state never exits after restart](https://github.com/traccar/traccar-client-sdk/issues/25), OPEN; created 1 August, updated 6 October 2026. Reporter names full Traccar Client 10.0.3. | DOCUMENTED ONLY for the device failure; CODE confirms stale-anchor fallback, exit-only region/no state request, and stopped significant-change monitoring remain here. Shipped app-to-SDK provenance was not verified. Treat as a high-priority reproduction case, not a passed fix. |
+| [#26: Android false STILL exit/blackout](https://github.com/traccar/traccar-client-sdk/issues/26), OPEN; 15 September 2026, reports SDK 1.0.8 and asks about 1.0.11. | Automatic heartbeat remains paused-only; effective distance-based acquisition can suppress stationary fixes. Mechanism still plausible, but this revision's physical outcome is UNKNOWN. Need liveness/short-departure tests. |
+| [#27: foreground-service timeout during cold bootstrap stop](https://github.com/traccar/traccar-client-sdk/issues/27), OPEN; 16 September 2026, Flutter/native 1.0.11 reports. | Reporter explicitly calls root cause unconfirmed. SharedTracker reconstruction of enabled persisted state before subsequent stop remains a candidate lifecycle race. Do not claim this audit reproduced the crash or that notification denial explains the Android 10 report. |
+| Local `f7c04fc…` (19 July): disable iOS automatic location pausing; `a7894bf…` (13 August): remove native distance filter, subject “Attempt to fix iOS tracking”; `f32994e…` (21 June): retain network monitor. | Patches inspected and confirmed ancestors of HEAD. Concrete maintenance work is present, but no attached device regression results prove complete resolution. |
+| Upstream `v1.1.3...v1.1.4` comparison | Functional change inspected adds custom HTTP headers plus release/version packaging. No local-history/manual-shift, RN AutoInit/path-pod, or cited stationary-lifecycle repair was found in that comparison. Updating alone is not evidence these gaps disappear. |
+
+Other missing CourierTax features are architectural, not necessarily upstream bugs: durable shifts/segments, persistent route reads/events, correct manual pauses, route-distance/work-duration totals, full local deletion/export, acquisition health/error reporting, robust storage failures, and regression tests. The accounting/tax/vehicle/subscription/localization features are absent as product modules. Reusing this SDK does not implement those requirements.
+
+## 11. Physical-device acceptance plan — proposed, not executed
+
+### 11.1 Test setup and measurement rules
+
+Use an actual signed consumer app, not only the native sample or simulator. Test at least a Pixel/stock Android device and an OEM device with aggressive battery policy, across relevant Android permission/service generations (including Android 12, 13, 14+ and the chosen current target devices); include at least two physical iPhone/iOS generations supported by the chosen app minimum and current release. Exact hardware/OS selection depends on real courier usage. Include Google and platform-location provider paths if both will be supported.
+
+Define the stop/pause boundary as an acknowledged durable user-intent transition. Handle in-flight fixes with their original acquisition time; shutdown must not silently extend the active segment or resurrect a stopped shift.
+
+Before each run record app/engine SHA and package provenance, phone/OS, permissions including precise/Always/background/motion/notification, battery/power policy, location config, network state, and start battery/temperature. Record local point IDs/timestamps, durable commit counts, state/permission changes, process launches, errors, and segment boundaries. Use redacted diagnostics. Compare device and app clocks and ensure results belong to that run.
+
+**Proposed initial gates, not measured performance promises:** for an accuracy-focused POC with a deliberately chosen dense sampling policy, require no unexplained moving-GPS gaps over 30 seconds when outdoor signal is available; investigate urban route-distance error above 5% and open-road error above 3% against an independent reference. Predefine a stationary-drift allowance and a battery budget after a paired baseline pilot. These values are experiment starting points, not SDK guarantees or tax certification. Document GPS outages as gaps rather than fabricating observations.
+
+For **every row below, code inspection alone cannot prove the pass criterion**. All device rows are currently **UNRUN / UNKNOWN**. A legitimate OS limitation may have a different expected outcome from uninterrupted ordinary-background tracking; the app must report it honestly.
+
+### 11.2 Android physical-device matrix
+
+| Scenario | Procedure | Observable pass criterion |
+|---|---|---|
+| Foreground baseline → other apps → locked for 2+ hours | Start visibly; walk/ride/drive a reference route; alternate Wolt/Bolt/Google Maps; lock screen for most of the run. | Persistent truthful tracking indication; native durable points continue within chosen gap budget; no unexplained session end; known-route accuracy and battery recorded. |
+| Incoming/ongoing call | Receive and complete a call while moving/locked, then navigate. | No silent recording stop; any resource/permission interruption is logged and visible; committed points intact. |
+| Mobile-data loss/reconnection | Disable mobile data/Wi-Fi while keeping GNSS possible; move ≥30 minutes; kill neither app nor recorder; restore network. | Local committed history/counts remain readable throughout; reconnection does not delete route history; no duplicate mileage. Unmodified queue deletion is expected to FAIL the proposed permanent-history requirement. |
+| Manual pause/resume/stop | Pause while moving, continue moving, resume, then stop; attempt one-shot calls off shift. | No points acquired/retained for a manual break/off shift under the product policy; movement does not auto-resume a manual break; no distance bridge across break/shift; restart preserves intent. |
+| Urban short trips and parking | Many stops/turns; move <100 m after stillness; repeat with automatic stop detection on/off. | Departure latency quantified; no missed short trip; stationary drift stays within agreed allowance; work time is not equated with moving time. |
+| Motorway/tunnel/weak GPS | Known route plus tunnel/parking garage/urban canyon. | No impossible-jump mileage; raw/accepted quality inspectable; missing segments flagged; error measured against independent reference. |
+| Notification denied, approximate/fine/background denied or revoked | Exercise each permission combination at start and midshift, including Android settings. | Start either succeeds with a legally valid foreground service and truthful status or fails/degrades visibly; never reports healthy GPS solely from enabled flag. |
+| Screen-off Doze, low-power and OEM restrictions | Long stationary then departure; battery saver, OEM default/restricted mode, optional wake lock settings. | Measured continuity/resumption/battery; restrictions surfaced; no promise of unsupported exemptions. |
+| OS memory kill versus crash | Induce separately; reopen and, where permitted, observe service restart. | Previously committed history intact; eligible active shift restored with an interruption marker; no new shift created; errors and gaps explicit. |
+| Recents swipe versus Android task-manager Stop/Settings Force stop | Test separately; record OS/vendor behavior; relaunch. | Correct documented distinctions; no guaranteed force-stop persistence claimed; relaunch reconciles shift intent and gaps; stopped shifts stay stopped. |
+| Reboot/first unlock and app update | Test enabled and stopped states; install an update retaining app data. | Committed data/migrations intact; eligible restoration respects current shift and OS service rules; no off-shift auto-start; gap recorded. |
+| Storage pressure/full database and concurrent stop | Fill controlled test storage; stop during incoming updates; immediately relaunch/reboot. | No acknowledged committed row loss; truthful disk error; no stale enabled intent resurrected; no corruption. |
+
+### 11.3 iOS physical-device matrix
+
+| Scenario | Procedure | Observable pass criterion |
+|---|---|---|
+| Foreground baseline → courier/maps apps → locked for 2+ hours | Explicit Start with appropriate grants; use Wolt/Bolt/Maps and lock while moving. | Native commits within selected outdoor gap budget; no silent suspension-induced stop; battery/distance measured; user understands active recording. |
+| Call interruption | Receive a call while locked and moving, return to navigation. | Session remains truthful and committed route preserved; interruptions visible, no false working-time jump. |
+| Offline/reconnect | Mobile data/Wi-Fi off while moving, then reconnect, including locked-device writes. | Permanent local route history retained/readable; no dependency on server response, deletion, or foreground JS to preserve committed data. |
+| Manual pause/resume/stop | Break while moving; move outside stationary region; resume; stop with heartbeat/update in flight. | Manual break cannot auto-resume; no off-shift one-shot acquisitions; segments/history/relaunch intent correct. |
+| Urban/parking/short departure | Stationary beyond timeout; move within/beyond 100 m, repeat after cold process launch and with motion denied. | No stale-region deadlock; resumption latency and initial-distance loss bounded; automatic stillness not charged as unpaid break. |
+| Motorway/tunnel/weak signal | Reference route plus known GPS loss. | Plausible accepted fixes, uncertainty/gaps marked, no fabricated tunnel track or implausible jump mileage; distance error measured. |
+| When In Use → Always, reduced/full accuracy, denial/revocation | Fresh install and settings changes midshift; include motion denial/Background App Refresh off. | Clear upgrade/recovery UI and degraded status; no false claim that enabled means authorized; no secret off-shift requests. |
+| Low-power/thermal conditions | Two-hour paired routes with/without low-power mode; stationary then departure. | Quantified battery and gap results; limitations recorded without guaranteed heartbeat timing. |
+| OS memory termination versus crash | Test separately with persisted enabled state, including background relaunch if eligible. | Committed rows intact; correct native launch hooks; explicit interruption; no reliance on foreground React initialization to register BG handlers. |
+| User app-switcher force-quit | Force-quit during a shift; move; relaunch. | Do not demand impossible guaranteed continuation. Preserve prior history, show interruption, and require/reconcile explicit continuation according to product policy; do not call the missing route measured. |
+| Reboot/first unlock/update | Test active/stopped sessions and data-preserving update. | Data/migration integrity; eligible restore obeys OS limits and shift intent; stopped shift remains stopped; no concealed restart guarantee. |
+| BGAppRefresh heartbeat lifecycle | Test exact RN package with early native registration, task expiry and no foreground JS setup. | Registration works; meaningful work completes/commits or times out honestly before task completion; a “task fired” log alone fails. |
+| File protection, storage-full, deletion/backup | Inspect signed app data while locked/unlocked, controlled disk pressure, deletion/export and backups. | Intended protection/retention verified; acknowledged commits survive; full deletion covers all route/config/state/log copies subject to documented backup policy. |
+
+Never label this SDK “reliable on both platforms” until these physical-device acceptance results exist. Simulators, successful package builds, source comments and README claims cannot replace them.
+
+## 12. Comparing three approaches
+
+Comparative recommendations, complexity and ownership assessments below are **INFERRED** engineering judgments, grounded in the cited implementation/documentation rather than measured delivery time.
+
+| Dimension | A. Fresh CourierTax + adapted Traccar engine | B. Fresh CourierTax + another engine/targeted native GPS | C. Fork full Traccar Client or Comma |
+|---|---|---|---|
+| Reuse | Reuses implemented native acquisition, motion/service/persistence foundations. | Expo Location/TaskManager exposes a more natural app-facing capture route; commercial modules may provide richer lifecycle APIs; custom native code gives control. | Reuses an existing product but brings screens, settings, server/account assumptions and unrelated behavior. Comma bookkeeping reuse is not proven without its exact source. |
+| iOS/Android readiness | Both implemented; RN iOS packaging/lifecycle and identified permission/stationary risks need work; reliability unproven. | Expo is documented on both platforms but still OS-limited; a supported commercial module can be evaluated. New native code needs full dual-platform engineering and testing. | Full client has real tracking code but is not a courier tax app. Comma's iOS stub is supplied prior-audit context, so cannot count as an iOS engine. |
+| Offline-first | Requires native local-only mode, retained route store and durable RN API. | No Traccar protocol dependency for Expo/native recording; still implement durable storage, shifts, quality/distance, recovery. | Existing server-oriented tracking or accounting architecture may need larger changes than extracting a suitable component. |
+| Compatibility | KMP/Gradle/Maven/XCFramework plus RN/Expo compatibility surface. | Expo-aligned package versions simplify one surface; commercial/vendor or own-native constraints remain. | Carries whole-app dependency/migration/lifecycle burden. |
+| Security/privacy | Must eliminate or deliberately configure upload, logs and off-shift one-shots. | Control local storage/data flow from inception; audit any alternative vendor network behavior/licensing. | Must audit/remove unrelated endpoints, identifiers, permissions, backups and analytics across the whole app. |
+| Maintenance/debt | A focused fork incurs native merging/artifact distribution and regression responsibilities. | Expo baseline reduces custom engine code; commercial option adds vendor cost/dependency; custom native code has highest engine ownership. | Likely highest product-conversion debt; existing code is not automatically reusable architecture. |
+| Complexity | MEDIUM–HIGH GPS integration; bookkeeping/tax product remains separate. | MEDIUM for an Expo recorder prototype; HIGH for production dual-platform reliability or a new native engine. | HIGH/uncertain overall, especially reconstructing missing iOS GPS plus changing product architecture. |
+| Recommendation | Worth a bounded comparison if native machinery saves demonstrable effort after fixes. | **Preferred starting architecture**: fresh app with a swappable engine; evaluate Expo local recorder first and compare hardware results. | Lowest priority unless a separate source audit proves major relevant reuse outweighs conversion cost. |
+
+Expo alternative evidence: [official Location documentation source](https://github.com/expo/expo/blob/main/docs/pages/versions/unversioned/sdk/location.mdx). It documents termination/vendor limits and background permission/task requirements; it is not a promise of force-quit survival. Use a top-level TaskManager task and persist before depending on UI callbacks. No alternative app was built here.
+
+A second maintained alternative to evaluate is [Transistorsoft React Native Background Geolocation](https://github.com/transistorsoft/react-native-background-geolocation). Its inspected current v5 source documentation requires a commercial release licence on **both iOS and Android** (debug testing is treated separately); do not rely on older Android-only pricing assumptions. Its specific performance, serverless configuration, storage/export behavior and licence contract would need their own POC/audit. Building a new Core Location/Fused Location engine is possible but shifts all lifecycle/storage/test responsibility to CourierTax; it is not inherently a low-effort shortcut.
+
+Selected Comma MIT bookkeeping components might be reusable after verifying their actual licence, data model and Latvian requirements. Its tax calculations cannot be presumed correct for Latvia. Traccar's implemented iOS code makes it a stronger **GPS-engine** starting point than the described Comma stub; it does not establish the best overall CourierTax product foundation.
+
+## 13. Effort, ranked next steps, and smallest experiment
+
+Effort labels are **INFERRED** engineering judgments describing complexity, not hours, percentages or a fixed estimate. Access to accounts/devices and the chosen Expo/RN versions can change the result.
+
+| Task | Effort | Reason/unknowns |
+|---|---|---|
+| Build/install minimal native iOS example | MEDIUM | macOS/Xcode or hosted build, XCFramework consumption, signing/provisioning, permissions and physical iPhone; untested here. RN iOS packaging adds work beyond the native example. |
+| Build/install minimal native Android example | LOW–MEDIUM | Debug build/signature check passed; actual install/permission/service behavior and hardware access remain. |
+| Implement/validate reliable dual-platform background GPS | HIGH | OS lifecycle, permission transitions, stationary recovery, error visibility, vendor behavior, battery and real regression matrix. Existing code reduces implementation scope, not proof obligations. |
+| Store points locally/calculate distance without a server | MEDIUM–HIGH | Feasible, but SDK needs local-only/retained-store interface; distance-quality and interruption rules are product work. |
+| Shift pause/resume/interruption recovery | MEDIUM–HIGH | Durable user intent, segmentation, serialized transitions and migration/relaunch semantics; automatic stationary flag is insufficient. |
+| Integrate GPS into fresh RN/Expo app | MEDIUM–HIGH | Native packaging/AutoInit, selected Expo/RN/New Architecture compatibility, plugin/config and artifact provenance. |
+| App-store distribution and permissions | MEDIUM–HIGH | Accounts/signing, truthful disclosure/privacy, current policy checks, review evidence and repeated device tests; approval not guaranteed. |
+
+Ranked next actions, **proposed only**:
+
+1. **Define the durable contract and pass gates.** Decide what Start, manual Pause, Resume and Stop mean; exactly which committed data must survive; how gaps/unknown distance are shown; and the retention/export/deletion policy. This prevents a UI flag from becoming a false reliability claim.
+2. **Create the smallest throwaway device experiment, not CourierTax.** One screen: Start/Pause/Resume/Stop, permission/recorder-health status, committed point/segment count, route distance and export of redacted diagnostics. A native recorder must commit points even when the JS UI is suspended. No tax, income, subscriptions or public tracking backend.
+3. **Test a serverless baseline and bounded Traccar candidate.** Select one coherent Expo/RN/toolchain. Baseline: Expo Location + a top-level TaskManager task + durable local store. Traccar candidate: first resolve iOS package distribution and early native launch registration, then implement the smallest explicit local-only durable bridge; verify each app links the intended native version. The unmodified SDK alone cannot demonstrate the required local history UI.
+4. **Run one physical Android and iPhone reference route immediately.** Two hours locked/app-switching, a call, an offline interval, manual break, stop, export; compare committed points, known-route distance and battery. Start with automatic stationary optimization disabled to isolate acquisition, then repeat with it enabled to expose departure/relaunch issues. Do not use a demo server with real location data.
+5. **Reproduce the three reported failure classes and permission-denial paths.** Prioritize iOS stale-region restart and RN launch hooks, Android foreground startup/stop race, notification-denial fallback, and stationary liveness. An update to 1.1.4 is not a substitute for those tests.
+6. **Choose the engine based on results and ownership cost.** Proceed to CourierTax only if both physical platforms meet the ordinary-background/offline/manual-intent gates and interruptions are honestly represented. Expand device coverage, secure storage and release-policy checks before production.
+
+**Stop/go gate:** if neither candidate can meet the normal locked-screen/background recording contract without unexplained losses, or the required native maintenance is unaffordable, do not proceed with the full product on that engine. A permitted OS force-quit interruption is handled as a disclosed limitation, not covered up as continuous tracking.
+
+## 14. Limitations and integrity of this audit
+
+- No physical devices, GPS/call/offline routes, battery benchmark, force-quit/reboot experiment, on-device SQLite inspection or iOS compilation/signing were available/executed.
+- The Android check reused existing valid build outputs. Native RN/Expo host builds and the shipped iOS binary's exact contents/ABI were not verified.
+- No exhaustive dependency vulnerability, source licence, proprietary Google telemetry, GDPR/legal or Latvian-tax review was performed. Important dependency licences were checked, with proprietary Google terms called out.
+- Direct GitHub API and several Apple/Android/Expo public documentation endpoints returned proxy 403. GitHub web issue/release data and official documentation source files supplied the evidence described; this was not treated as proof that all issues/policies were reviewed.
+- Upstream state after the checked 1.1.3 revision was observed separately; neither the checkout nor its dependency/lockfile pins were updated.
+- Comma's exact repository/revision was unavailable. Its prior stub/licence findings remain supplied context, not independently reproduced findings.
+- This is a report-only change in the SDK checkout. Scratch evidence/logs and downloaded public metadata/source archives live outside it under `/workspace/.audit-evidence`; generated existing ignored build outputs were refreshed. No real tracking was started and no third parties were messaged.
+
+## Appendix A. Source citation index
+
+All links resolve against the audited SHA. Ranges are source-inspection evidence, not device-test results.
+
+| Full path in repository | Cited lines |
+|---|---|
+| `.github/workflows/release.yml` | 63–83 |
+| `LICENSE` | 1–201 |
+| `Package.swift` | 1–8, 9–23 |
+| `README.md` | 19–27 |
+| `core/Sources/TraccarClientAutoInit/TraccarClientAutoInit.m` | 10–19 |
+| `core/build.gradle.kts` | 22–27 |
+| `core/src/androidMain/AndroidManifest.xml` | 1–42 |
+| `core/src/androidMain/kotlin/org/traccar/client/ActivityRecognitionDetector.kt` | 130–187 |
+| `core/src/androidMain/kotlin/org/traccar/client/AlarmHeartbeatTrigger.kt` | 29–74 |
+| `core/src/androidMain/kotlin/org/traccar/client/AndroidLocationSource.kt` | 29–83 |
+| `core/src/androidMain/kotlin/org/traccar/client/BootReceiver.kt` | 11–24 |
+| `core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt` | 29–127, 39–47, 84–98 |
+| `core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt` | 32–89, 34–89, 78–89, 130–140 |
+| `core/src/androidMain/kotlin/org/traccar/client/GeofenceDetector.kt` | 42–85 |
+| `core/src/androidMain/kotlin/org/traccar/client/PermissionActivity.kt` | 12–25, 12–48 |
+| `core/src/androidMain/kotlin/org/traccar/client/Permissions.kt` | 10–35 |
+| `core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt` | 14–19, 21–32, 35–54 |
+| `core/src/androidMain/kotlin/org/traccar/client/TrackerExtensions.kt` | 8–40 |
+| `core/src/androidMain/kotlin/org/traccar/client/TrackerStartup.kt` | 12–16 |
+| `core/src/androidMain/kotlin/org/traccar/client/WakeLockHolder.kt` | 22–42 |
+| `core/src/commonMain/kotlin/org/traccar/client/Component.kt` | 23–29 |
+| `core/src/commonMain/kotlin/org/traccar/client/Config.kt` | 6–15, 24–47 |
+| `core/src/commonMain/kotlin/org/traccar/client/CoreModule.kt` | 8–28 |
+| `core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt` | 16–56, 19–46 |
+| `core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt` | 16–39, 20–30, 42 |
+| `core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt` | 16–44, 16–48, 20–76, 29–50, 54–56 |
+| `core/src/commonMain/kotlin/org/traccar/client/Log.kt` | 14–24 |
+| `core/src/commonMain/kotlin/org/traccar/client/Position.kt` | 6–19 |
+| `core/src/commonMain/kotlin/org/traccar/client/PositionQueue.kt` | 3–7 |
+| `core/src/commonMain/kotlin/org/traccar/client/State.kt` | 6–10 |
+| `core/src/commonMain/kotlin/org/traccar/client/StateStore.kt` | 22–26 |
+| `core/src/commonMain/kotlin/org/traccar/client/Tracker.kt` | 22–32, 24–27, 25–47, 29–32, 29–47, 34–42, 59–91, 66–74, 66–91 |
+| `core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt` | 28–29, 49–61, 63–82, 72–108, 73–82, 79–108, 89–108 |
+| `core/src/commonMain/kotlin/org/traccar/client/Uploader.kt` | 3–5 |
+| `core/src/commonMain/sqldelight/org/traccar/client/db/Config.sq` | 1–13 |
+| `core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq` | 1–16, 18–26 |
+| `core/src/commonMain/sqldelight/org/traccar/client/db/State.sq` | 1–13 |
+| `core/src/iosMain/kotlin/org/traccar/client/IosBackgroundHeartbeat.kt` | 26–76 |
+| `core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt` | 39–67, 56–115, 74–109, 118–138, 189–200 |
+| `core/src/iosMain/kotlin/org/traccar/client/MotionActivityDetector.kt` | 32–71 |
+| `core/src/iosMain/kotlin/org/traccar/client/PlatformModule.kt` | 11–15 |
+| `core/src/iosMain/kotlin/org/traccar/client/RegionDetector.kt` | 43–109, 76–80 |
+| `gradle/libs.versions.toml` | 1–14 |
+| `gradle/wrapper/gradle-wrapper.properties` | 1–10 |
+| `react-native/android/build.gradle` | 44–50 |
+| `react-native/package.json` | 27–49 |
+| `react-native/react-native-traccar-client-sdk.podspec` | 10–18, 14–33, 16–18, 16–33 |
+| `react-native/src/index.tsx` | 19–147, 110–147, 124–132 |
+| `samples/android/build.gradle.kts` | 6–22 |
+| `samples/android/src/main/java/org/traccar/client/sample/SampleApp.kt` | 34–35, 34–46 |
+| `samples/ios/TraccarClientSample/Info.plist` | 5–35 |
+| `samples/ios/TraccarClientSample/SampleApp.swift` | 4–5 |
+| `samples/ios/project.yml` | 18–25 |
+
+
+## Appendix B. Command and request ledger
+
+Every verification command/request and its outcome is recorded below. File-reading loops inspect the named files without changing them. Network probes were read-only; HTTP status and subprocess failures are recorded separately from a successful wrapper script. Documentation/ledger creation operations only write the report or scratch evidence; they are not application tests. Full captured outputs remain in `/workspace/.audit-evidence` for review.
+
+### B1. Root-agent intake, identity and shared-engine inspections
+
+Working directory was `/workspace/traccar-client-sdk` unless an absolute path is specified. The uploaded text was downloaded with `download_file(file_id="file_00000000a0f481f48849ec4ad54fa7ca")`; tool success returned the 11,200-byte attachment path. It was then read with `cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt` (exit 0). Tool discovery searched available tool metadata for web/search capability; no independent browser/search tool was available, so read-only curl/Git sources were used.
+
+```sh
+pwd && git status --short && rg --files -g AGENTS.md -g '!node_modules' -g '!build' -g '!.git' /workspace
+```
+
+Result exit 1: pwd confirmed the SDK checkout, Git status was clean, and rg found no AGENTS.md. This was an absent search match, not a build failure.
+
+A Python `subprocess.run` metadata batch invoked each following Git command with `git -C /workspace/traccar-client-sdk`, recording exit/status and sanitized remote identities in `/workspace/.audit-evidence/identity.json` (batch exit 0):
+
+| Git arguments | Exit/result |
+|---|---|
+| `remote` | 0; origin only. |
+| `remote get-url origin` | 0; sanitized HTTPS identity Susurik/traccar-client-sdk. |
+| `branch --show-current` | 0; work. |
+| `rev-parse HEAD` | 0; checked SHA shown above. |
+| `status --short` | 0; empty. |
+| `log -1 --format=%H%n%aI%n%cI%n%s` | 0; Release 1.1.3 and author/committer timestamp shown above. |
+| `tag --list --sort=-version:refname` | 0; empty. |
+| `rev-parse --is-shallow-repository` | 0; false. |
+| `rev-list --count HEAD` | 0; 166. |
+
+Same shell then ran:
+
+```sh
+cat README.md Package.swift LICENSE
+find .github core/src react-native/src samples flutter/lib -maxdepth 3 -type f | sort
+```
+
+Result exit 0: identity/documentation/licence/package and layout inspected. No checkout mutation.
+
+```sh
+for f in core/src/commonMain/kotlin/org/traccar/client/{Config.kt,ConfigStore.kt,CoreModule.kt,Tracker.kt,TrackerEngine.kt,Position.kt,PositionQueue.kt,DatabaseQueue.kt,HttpUploader.kt,LocationFilter.kt,LogStore.kt,StateStore.kt,Uploader.kt,Signal.kt}; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result exit 0: all named shared-engine files read with line numbers.
+
+```sh
+for f in core/src/commonMain/sqldelight/org/traccar/client/db/{Position.sq,State.sq,Config.sq,LogEntry.sq,1.sqm,2.sqm} core/src/commonMain/kotlin/org/traccar/client/{State.kt,Component.kt,Log.kt} core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt core/src/iosMain/kotlin/org/traccar/client/PlatformModule.kt react-native/src/index.tsx; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+rg -n 'http|https|encrypt|SQLCipher|FileProtection|excludeFromBackup|backup|distance|pause|Position|dataExtraction' core react-native samples flutter/lib -g '!build/**' -g '!node_modules/**' -g '!package-lock.json' -g '!lib/module/**' -g '!lib/typescript/**'
+```
+
+Result exit 0: schemas, platform bindings, JS API and targeted network/storage/filter symbols read. Pattern results are scoped source inspection, not exhaustive binary/traffic analysis.
+
+### B2. Root-agent executed validation and final checks
+
+The helper `/workspace/.audit-evidence/run_check.py` invokes each command below through `bash -lc` in the repository, captures combined stdout/stderr and preserves its actual exit code. Metadata and outputs are saved in `root-commands.jsonl` and the named log files. Creating this helper changed scratch evidence only.
+
+#### validation
+
+```sh
+source /workspace/.cloud-setup/network-env.sh && java -version && javac -version && node --version && ./gradlew :samples:android:assembleDebug --no-daemon --max-workers=3 --console=plain && "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify samples/android/build/outputs/apk/debug/android-debug.apk && (cd react-native && npm run prepare && npm run typecheck) && (cd flutter && flutter analyze --no-pub)
+```
+
+Exit 0; captured output `validation.log`. Android incremental build/signature, npm build/typecheck and Flutter analysis all passed; tool versions are in section 3. No device test.
+
+#### tracked-inventory
+
+```sh
+git status --porcelain=v1 && git ls-files "*test*" "*Test*" "*NOTICE*" && nl -ba README.md && nl -ba gradle/libs.versions.toml && nl -ba core/build.gradle.kts && nl -ba .github/workflows/release.yml
+```
+
+Exit 0; captured output `tracked-inventory.log`. Initial Git checks empty; no tracked test/NOTICE files; README/toolchain/release workflow read.
+
+#### common-boundaries
+
+```sh
+nl -ba core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/Tracker.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt && nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq && nl -ba core/src/commonMain/kotlin/org/traccar/client/StateStore.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/Log.kt
+```
+
+Exit 0; captured output `common-boundaries.log`. Read exact line-numbered shared pipeline/filter/queue/state/log code for durability and stop-boundary review.
+
+Root synthesis/review also ran read-only `ls -lh /workspace/.audit-evidence` and targeted `rg`/`cat` reads of `ios.md`, `expo-docs.md`, `issue-25-summary.json`, `issue-26-summary.json`, `issue-27-summary.json`, `dependency-licenses.json`, `react-native.md`, `commands-android-summary.md`, and `commands-licenses.md` (exit 0). A Python citation-range check found several guessed out-of-range spans and they were corrected before publication. Report authoring via `apply_patch` and scratch Python scripts wrote documentation/evidence only. Final validation commands and outcomes are recorded at the end of this appendix.
+
+### B3. Android inspections and review
+
+### Android audit exact command/result ledger
+
+All commands were read-only inspections run from `/workspace/traccar-client-sdk`. Evidence-writing Python wrappers and `apply_patch` wrote only `/workspace/.audit-evidence`; they did not change the checkout. No install, build, device or synthetic functionality test was executed by this sub-audit. Full stdout is preserved in `commands-android.md`.
+
+#### 1. Exit 0
+
+```sh
+cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt
+```
+
+Result: Full uploaded audit instruction read successfully.
+
+#### 2. Exit 1
+
+```sh
+git status --short && git rev-parse HEAD && git branch --show-current && rg --files -g AGENTS.md
+```
+
+Result: Git clean; HEAD 0e0db40ea6d58df47523af00c72716dae8c91213; branch work. Final rg found no AGENTS.md (exit 1).
+
+#### 3. Exit 0
+
+```sh
+for f in core/src/androidMain/AndroidManifest.xml core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt core/src/androidMain/kotlin/org/traccar/client/AndroidLocationSource.kt core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt core/src/androidMain/kotlin/org/traccar/client/Permissions.kt core/src/androidMain/kotlin/org/traccar/client/PermissionActivity.kt; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Android manifest, source selection, both location providers, service and permission implementation read with line numbers.
+
+#### 4. Exit 0
+
+```sh
+for f in core/src/androidMain/kotlin/org/traccar/client/BootReceiver.kt core/src/androidMain/kotlin/org/traccar/client/TrackerStartup.kt core/src/androidMain/kotlin/org/traccar/client/TrackerExtensions.kt core/src/androidMain/kotlin/org/traccar/client/AlarmHeartbeatTrigger.kt core/src/androidMain/kotlin/org/traccar/client/WakeLockHolder.kt core/src/androidMain/kotlin/org/traccar/client/AndroidNetworkMonitor.kt core/src/androidMain/kotlin/org/traccar/client/AndroidBatteryProcessor.kt; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Boot/startup, native extensions, alarms, wake lock, connectivity and battery code read with line numbers.
+
+#### 5. Exit 0
+
+```sh
+nl -ba core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt
+```
+
+Result: ForegroundServiceHolder/TrackerService read independently in full after first combined display was truncated; stored full output already complete.
+
+#### 6. Exit 0
+
+```sh
+for f in core/src/androidMain/kotlin/org/traccar/client/ActivityRecognitionDetector.kt core/src/androidMain/kotlin/org/traccar/client/GeofenceDetector.kt core/src/commonMain/kotlin/org/traccar/client/Config.kt core/src/commonMain/kotlin/org/traccar/client/State.kt core/src/commonMain/kotlin/org/traccar/client/Component.kt; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Motion recognition, geofence, config, state and coroutine lifecycle read with line numbers.
+
+#### 7. Exit 0
+
+```sh
+for f in core/src/commonMain/kotlin/org/traccar/client/Tracker.kt core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt core/src/commonMain/kotlin/org/traccar/client/CoreModule.kt core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt core/src/commonMain/kotlin/org/traccar/client/Signal.kt; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Core start/stop/bootstrap, engine, DI, filtering and signals read with line numbers.
+
+#### 8. Exit 0
+
+```sh
+for f in core/src/commonMain/kotlin/org/traccar/client/Position.kt core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt core/src/commonMain/kotlin/org/traccar/client/StateStore.kt core/src/commonMain/kotlin/org/traccar/client/ConfigStore.kt core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt core/src/commonMain/kotlin/org/traccar/client/Log.kt core/src/commonMain/kotlin/org/traccar/client/LogStore.kt core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq core/src/commonMain/sqldelight/org/traccar/client/db/State.sq core/src/commonMain/sqldelight/org/traccar/client/db/Config.sq; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Position model, SQLite queue/state/config, uploader, diagnostic retention and SQL schema read with line numbers.
+
+#### 9. Exit 0
+
+```sh
+for f in react-native/android/src/main/java/org/traccar/reactnative/TraccarClientSdkModule.kt react-native/src/index.tsx samples/android/src/main/AndroidManifest.xml samples/android/src/main/java/org/traccar/client/sample/SampleApp.kt; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done
+```
+
+Result: Android RN bridge, JS API and sample app/manifest read with line numbers.
+
+#### 10. Exit 0
+
+```sh
+rg -n 'ACCESS_COARSE_LOCATION|allowBackup|dataExtractionRules|fullBackupContent|encrypted|SQLCipher|clearState|clearConfig|pause|resume|onTaskRemoved|stopWithTask|onTrimMemory|WorkManager|JobScheduler|requestLocationUpdates|tryEmit|\.all\(|distance|analytics|firebase|http|crash' core/src/androidMain core/src/commonMain react-native/android samples/android -g '*.kt' -g '*.xml' -g '*.sq'
+```
+
+Result: Search confirmed source paths for permissions, pause/state, emit and network behavior; no coarse/backup encryption or lifecycle-supervisor declaration found in inspected scope.
+
+#### 11. Exit 0
+
+```sh
+nl -ba react-native/android/build.gradle && nl -ba core/build.gradle.kts && nl -ba samples/android/build.gradle.kts && nl -ba gradle/libs.versions.toml && nl -ba core/src/commonMain/kotlin/org/traccar/client/PositionQueue.kt && nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/1.sqm && nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/2.sqm
+```
+
+Result: Native/RN Gradle metadata, pinned versions, queue API and database migrations read with line numbers.
+
+#### 12. Exit 0
+
+```sh
+git log -12 --date=iso-strict --format='%h %ad %s' -- core/src/androidMain core/src/commonMain && git tag --list --sort=-version:refname | head -n 10
+```
+
+Result: Relevant native/common commits through Oct 16 inspected; git tag listing empty.
+
+#### 13. Exit 0
+
+```sh
+git show --stat --oneline c8ecfe2 e0a4445 2311c06 ebbc55f 01adf5c 8a4d518 0056264 && git show c8ecfe2 -- core/src/androidMain/kotlin/org/traccar/client/ActivityRecognitionDetector.kt && git show 2311c06 -- core/src/commonMain/kotlin/org/traccar/client/Config.kt core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt && git show ebbc55f -- core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt
+```
+
+Result: Selected motion, filter, heartbeat and permission-fix commits/diffs inspected.
+
+#### 14. Exit 0
+
+```sh
+git show 8a4d518 -- core/src/androidMain/kotlin/org/traccar/client/ForegroundServiceHolder.kt core/src/androidMain/kotlin/org/traccar/client/Permissions.kt core/src/androidMain/kotlin/org/traccar/client/PermissionActivity.kt && git show 0056264 -- core/src/androidMain/kotlin/org/traccar/client/AndroidLocationSource.kt core/src/androidMain/kotlin/org/traccar/client/FusedLocationSource.kt
+```
+
+Result: Notification-denied fallback commit and optional-value validation diffs inspected.
+
+#### 15. Exit 0
+
+```sh
+cat /workspace/.audit-evidence/issue-26-summary.json /workspace/.audit-evidence/issue-27-summary.json
+```
+
+Result: History/docs agent issue #26/#27 evidence files read; reporter claims and suspected causation kept distinct from our findings.
+
+#### 16. Exit 0
+
+```sh
+git status --short && git rev-parse HEAD
+```
+
+Result: Final Git status clean; HEAD unchanged at 0e0db40ea6d58df47523af00c72716dae8c91213.
+
+#### 17. Exit 0 — report review
+
+```sh
+nl -ba /workspace/.audit-evidence/report-draft.md
+```
+
+Result: Read draft for factual/citation review. Full captured output retained; display was truncated, so focused reads followed.
+
+#### 18. Exit 0 — report review
+
+```sh
+sed -n '124,186p' /workspace/.audit-evidence/report-draft.md
+```
+
+Result: Reviewed common lifecycle and Android sections. Corrections sent to parent; no draft edits.
+
+#### 19. Exit 0 — report review
+
+```sh
+sed -n '280,344p' /workspace/.audit-evidence/report-draft.md
+```
+
+Result: Reviewed toolchain, known issues and Android acceptance matrix. No additional behavioral contradiction found.
+
+#### 20. Exit 0 — citation validation
+
+Read-only Python validation extracted Android/common/source citation macros from the draft, resolved their existing files, and compared requested ranges with actual line counts. Result: seven ranges exceeded file lengths (WakeLockHolder, two PermissionActivity references, Permissions, BootReceiver, TrackerStartup, Gradle wrapper properties). The Android manifest has 48 lines, making its 1–42 range valid. Corrections sent to parent. Only evidence logs were written.
+
+### B4. iOS inspections and review
+
+All commands ran in `/workspace/traccar-client-sdk` except absolute-path evidence-file writing. Outputs were reviewed; none modified application files. Commands below are literal command strings sent to `exec_command`; loops are expanded by the shell during execution.
+
+1. `cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt && rg --files core/src/iosMain core/Sources samples/ios core/src/commonMain/kotlin/org/traccar/client` — exit 0; read full task and enumerated iOS/common/sample source.
+2. `for f in core/src/iosMain/kotlin/org/traccar/client/*.kt core/Sources/TraccarClientAutoInit/TraccarClientAutoInit.m samples/ios/TraccarClientSample/SampleApp.swift samples/ios/TraccarClientSample/Info.plist samples/ios/project.yml; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done` — exit 0; read every iOS implementation file and native sample with line numbers.
+3. `for f in core/src/commonMain/kotlin/org/traccar/client/{Tracker.kt,TrackerEngine.kt,State.kt,Config.kt,Component.kt,Signal.kt,Position.kt,LocationFilter.kt,CoreModule.kt,StateStore.kt,ConfigStore.kt,DatabaseQueue.kt,HttpUploader.kt}; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done` — exit 0; read common state/pipeline/storage/filtering/uploader source with line numbers.
+4. `for f in react-native/ios/TraccarClientSdk.swift react-native/ios/TraccarClientSdk.m react-native/react-native-traccar-client-sdk.podspec react-native/ios/PrivacyInfo.xcprivacy Package.swift core/src/commonMain/kotlin/org/traccar/client/Log.kt core/src/commonMain/kotlin/org/traccar/client/LogStore.kt core/src/commonMain/sqldelight/org/traccar/client/db/*.sq core/src/commonMain/sqldelight/org/traccar/client/db/*.sqm; do printf '\nFILE %s\n' "$f"; nl -ba "$f"; done` plus `rg -n 'register|sharedTracker|UIApplication|applicationDid|didFinishLaunching|requestAlwaysAuthorization|requestWhenInUse|showsBackgroundLocationIndicator|significant|CLActivity|allowsBackground|NSFileProtection|encrypt|Security|Keychain|hasLocation' core react-native samples/ios -g '!build/**' -g '!**/node_modules/**' -g '!**/lib/**'` — single exec, exit 0; inspected RN packaging/log/schema and lifecycle/security call-site search.
+5. `curl --fail --location --max-time 20 --silent --show-error https://developer.apple.com/documentation/corelocation/handling-location-updates-in-the-background -o /workspace/.audit-evidence/apple-background.html` — exit 22, HTTP 403; current official page unavailable through environment network policy.
+6. `curl --fail --location --max-time 20 --silent --show-error 'https://developer.apple.com/documentation/corelocation/cllocationmanager/startmonitoringsignificantlocationchanges()' -o /workspace/.audit-evidence/apple-significant.html` — exit 22, HTTP 403; current official page unavailable.
+7. `git log --format='%h %aI %s' -- core/src/iosMain core/Sources/TraccarClientAutoInit react-native/ios | head -n 45 && git status --short` — exit 0; reviewed latest 45 matching local commits and clean status. The history listing intentionally sampled 45 entries, not a claim that all history was reviewed.
+8. `git show --format=fuller --stat a7894bf && git show --format=short a7894bf -- core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt && git show --format=short f7c04fc -- core/src/iosMain/kotlin/org/traccar/client/IosLocationSource.kt && git show --format=short f32994e -- core/src/iosMain/kotlin/org/traccar/client/IosNetworkMonitor.kt && git merge-base --is-ancestor a7894bf HEAD && git merge-base --is-ancestor f7c04fc HEAD && git merge-base --is-ancestor f32994e HEAD` — exit 0; reviewed exact patches and confirmed all three precede HEAD.
+9. `apply_patch` created this evidence-only Markdown file under `/workspace/.audit-evidence`, outside the application checkout — success. No app code, dependency declaration, lockfile, commit, or PR changed.
+10. `python3` loaded `/workspace/.audit-evidence/doc-issue-25-data.json`, selected `payload.issueViewerRoute.data.repository.issue`, and printed number/title/url/state/body/bodyHTML (capped at 12,000 characters) — exit 0; reviewed the upstream report and compared it against already-read source. The source JSON was supplied by the history/docs agent; no additional remote request was made by this command.
+11. `apply_patch` added the issue #25 assessment and these command-ledger entries — success; documentation-only evidence file updated.
+12. `cat /workspace/.audit-evidence/report-draft.md` — exit 0, output exceeded the requested display budget and was truncated; used only for a broad report scan, not a claim that every displayed word was reviewed.
+13. `python3` read the draft and printed exact ranges from `## 6.` to `## 7.` and from `## 11.` to `## 12.` — exit 0; reviewed complete iOS findings and physical-test plan. Shared pipeline section 4 was fully visible in the preceding output. Sent concrete wording corrections to parent; did not edit the report draft.
+14. `apply_patch` appended these review-command/result entries to this scratch evidence file — success.
+
+### B5. React Native package and Expo integration inspections
+
+Each grouped shell command below is recorded as invoked; successful source inspections printed the referenced files. They are read-only except permitted audit downloads/report files. `&&` groups that stopped early are called out. Root may incorporate this appendix by reference in its final audit command log.
+
+##### R1 — supplied scope and checkout
+
+```sh
+cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt && git -C /workspace/traccar-client-sdk rev-parse HEAD && git -C /workspace/traccar-client-sdk status --short && rg --files /workspace/traccar-client-sdk/react-native /workspace/traccar-client-sdk/flutter /workspace/traccar-client-sdk/.github /workspace/traccar-client-sdk/core | head -70
+```
+
+Result exit0; read complete audit prompt; HEAD `0e0db40...`; status clean; file listing inspected.
+
+##### R2 — bridge/package files (cwd repository root)
+
+```sh
+nl -ba react-native/package.json && nl -ba react-native/src/index.tsx && nl -ba react-native/README.md && nl -ba react-native/react-native-traccar-client-sdk.podspec && nl -ba react-native/android/build.gradle && nl -ba react-native/android/src/main/AndroidManifest.xml && nl -ba react-native/ios/PrivacyInfo.xcprivacy
+```
+
+Result exit0; evidence cited above.
+
+```sh
+nl -ba react-native/ios/TraccarClientSdk.swift && nl -ba react-native/ios/TraccarClientSdk.m && nl -ba react-native/android/src/main/java/org/traccar/reactnative/TraccarClientSdkModule.kt && nl -ba react-native/android/src/main/java/org/traccar/reactnative/TraccarClientSdkPackage.kt && nl -ba Package.swift && nl -ba core/Sources/TraccarClientAutoInit/TraccarClientAutoInit.m
+```
+
+Result exit0; all native bridge methods and SPM autoinit read.
+
+##### R3 — native public API/storage/boot and maintenance (cwd repository root)
+
+```sh
+nl -ba core/src/commonMain/kotlin/org/traccar/client/Tracker.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/PositionQueue.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/Position.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/Config.kt && nl -ba core/src/iosMain/kotlin/org/traccar/client/IosBackgroundHeartbeat.kt && nl -ba core/src/iosMain/kotlin/org/traccar/client/PlatformModule.kt
+```
+
+Result exit0; storage, configuration and launch/task-registration boundaries inspected.
+
+```sh
+git log -n 10 --date=iso-strict --format='%h %ad %s' -- react-native && git tag --list && nl -ba .github/dependabot.yml && nl -ba .github/workflows/release.yml | sed -n '1,155p' && nl -ba README.md && nl -ba samples/ios/TraccarClientSample/Info.plist && nl -ba core/src/androidMain/AndroidManifest.xml && rg -n 'expo|Expo|TurboModule|codegenConfig|addListener|removeListeners|NativeEvent|RCTEventEmitter|Position|history|location' react-native --glob '!package-lock.json' --glob '!node_modules/**' --glob '!lib/**'
+```
+
+Result exit0; no local tags listed; history/docs/manifests inspected. Pattern search produced configuration and requestPosition references, with no Expo/event/history implementation.
+
+##### R4 — official docs host attempt (cwd /workspace)
+
+```sh
+mkdir -p /workspace/.audit-evidence && curl --location --silent --show-error --max-time 20 --output /workspace/.audit-evidence/cocoapods-podspec.html --write-out 'CocoaPods HTTP %{http_code}\n' https://guides.cocoapods.org/syntax/podspec.html && curl --location --silent --show-error --max-time 20 --output /workspace/.audit-evidence/traccar-react-native.html --write-out 'Traccar docs HTTP %{http_code}\n' https://www.traccar.org/traccar-client-sdk-react-native/ && rg -n -o '.{0,200}prepare_command.{0,300}|.{0,200}path.{0,200}' /workspace/.audit-evidence/cocoapods-podspec.html | head -30 && rg -n -o '.{0,100}pod install.{0,200}|.{0,100}XCFramework.{0,200}|.{0,100}New Architecture.{0,200}|.{0,100}Info.plist.{0,200}|.{0,100}Always.{0,200}' /workspace/.audit-evidence/traccar-react-native.html | head -30
+```
+
+Result exit56; CocoaPods CONNECT403/HTTP000; remaining commands in group did not execute.
+
+```sh
+curl --location --silent --show-error --max-time 20 --output /workspace/.audit-evidence/traccar-react-native.html --write-out 'Traccar docs HTTP %{http_code}\n' https://www.traccar.org/traccar-client-sdk-react-native/
+```
+
+Result exit56, CONNECT403/HTTP000; current Traccar hosted RN documentation inaccessible.
+
+##### R5 — authoritative CocoaPods source and autolinker
+
+```sh
+curl --fail --location --silent --show-error --max-time 20 https://raw.githubusercontent.com/CocoaPods/Core/master/lib/cocoapods-core/specification/dsl.rb -o /workspace/.audit-evidence/cocoapods-dsl.rb && rg -n 'prepare_command|:path|path option' /workspace/.audit-evidence/cocoapods-dsl.rb && git -C /workspace/traccar-client-sdk ls-files react-native && ls -la /workspace/traccar-client-sdk/react-native/ios && nl -ba /workspace/traccar-client-sdk/react-native/.gitignore
+```
+
+Result exit0; official source reachable; prepare_command/path rule found; framework absent from checkout; framework ignored.
+
+```sh
+nl -ba /workspace/.audit-evidence/cocoapods-dsl.rb | sed -n '486,522p' && rg -n 'podspecPath|:path =>|:path.*relative|relative_path.*podspec|pod .*path' react-native/node_modules/react-native/scripts/cocoapods/autolinking.rb react-native/node_modules/@react-native-community -g '*.rb' -g '*.js' 2>/dev/null | head -45 && nl -ba react-native/node_modules/react-native/scripts/cocoapods/autolinking.rb | sed -n '100,165p'
+```
+
+Result exit0; RN0.87.1 installed autolinker inspected. No new packages installed.
+
+##### R6 — public npm package metadata and current native framework versions
+
+```sh
+curl --fail --location --silent --show-error --max-time 20 https://registry.npmjs.org/react-native-traccar-client-sdk -o /workspace/.audit-evidence/npm-sdk-metadata.json && python3 - <<'PY'
+import json
+x=json.load(open('/workspace/.audit-evidence/npm-sdk-metadata.json'))
+v=x['versions'].get('1.1.3')
+print(json.dumps({'name':x['name'],'dist-tags':x.get('dist-tags'),'version_1.1.3_published':x.get('time',{}).get('1.1.3'),'maintainers':x.get('maintainers'),'version_1.1.3':{k:v.get(k) for k in ['license','repository','dist','scripts','files','peerDependencies']} if v else None},indent=2))
+PY
+```
+
+Result exit0;1.1.3 published2026-10-16, latest1.1.4, Apache2 metadata, tarball/integrity metadata retrieved. No credential values used or printed.
+
+```sh
+nl -ba react-native/node_modules/react-native/scripts/cocoapods/autolinking.rb | sed -n '162,172p' && nl -ba react-native/node_modules/react-native/package.json | sed -n '1,40p' && git -C /workspace/traccar-client-sdk branch --show-current && git -C /workspace/traccar-client-sdk log -1 --date=iso-strict --format='%H %ad %s' -- react-native && git -C /workspace/traccar-client-sdk status --short
+```
+
+Result exit0; confirmed :path, installed RN0.87.1, branch work, clean status.
+
+##### R7 — npm archive read, not install
+
+```sh
+curl --fail --location --silent --show-error --max-time 30 https://registry.npmjs.org/react-native-traccar-client-sdk/-/react-native-traccar-client-sdk-1.1.3.tgz -o /workspace/.audit-evidence/react-native-traccar-client-sdk-1.1.3.tgz && python3 - <<'PY'
+import base64,hashlib,json,tarfile
+p='/workspace/.audit-evidence/react-native-traccar-client-sdk-1.1.3.tgz'
+x=json.load(open('/workspace/.audit-evidence/npm-sdk-metadata.json'))['versions']['1.1.3']
+expected=x['dist']['integrity']; actual='sha512-'+base64.b64encode(hashlib.sha512(open(p,'rb').read()).digest()).decode()
+assert expected==actual,'npm integrity mismatch'
+print('Registry SHA512 integrity MATCH')
+with tarfile.open(p) as t:
+ for member in t.getnames():print(member)
+PY
+```
+
+Result exit0; registry SHA512 MATCH;17 entries, no native framework/LICENSE/plugin. Archive was not installed or executed.
+
+##### R8 — Maven metadata, asset existence and RN minimum versions
+
+```sh
+curl --fail --location --silent --show-error --max-time 20 https://repo.maven.apache.org/maven2/org/traccar/traccar-client-sdk/1.1.3/traccar-client-sdk-1.1.3.pom -o /workspace/.audit-evidence/traccar-client-sdk-1.1.3.pom && nl -ba /workspace/.audit-evidence/traccar-client-sdk-1.1.3.pom | sed -n '1,180p' && curl --location --silent --show-error --head --max-time 20 --write-out 'iOS asset HTTP %{http_code}\n' https://github.com/traccar/traccar-client-sdk/releases/download/v1.1.3/TraccarClientSDK.xcframework.zip
+```
+
+Result exit0; POM1.1.3 contains upstream identity, Apache2, Kotlin2.4.20 and dependency versions. iOS asset HEAD followed official redirects to HTTP200, content length12,967,086. Redirect headers contained transient public GitHub asset query signatures; not copied into report.
+
+```sh
+nl -ba react-native/node_modules/react-native/scripts/react_native_pods.rb | rg 'min_ios|min_supported' && rg -n 'min_ios_version_supported|15\.1|16\.0|minAndroidSdk|androidMinSdkVersion' react-native/node_modules/react-native/scripts/cocoapods/helpers.rb react-native/node_modules/react-native/ReactAndroid/build.gradle.kts react-native/node_modules/react-native/gradle/libs.versions.toml react-native/node_modules/react-native/ReactCommon/cxxreact/ReactNativeVersion.h 2>/dev/null && nl -ba react-native/node_modules/react-native/scripts/cocoapods/helpers.rb | sed -n '60,95p'
+```
+
+Result exit0; RN host iOS minimum15.1 confirmed.
+
+##### R9 — pipeline and dependency toolchain follow-up
+
+```sh
+nl -ba core/src/commonMain/kotlin/org/traccar/client/CoreModule.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt && nl -ba core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt && nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq && nl -ba react-native/node_modules/react-native/gradle/libs.versions.toml | sed -n '1,30p' && rg -n 'minSdkVersion|targetSdkVersion|compileSdkVersion|newArchEnabled' react-native/node_modules/react-native/ReactAndroid/build.gradle.kts react-native/node_modules/react-native/ReactAndroid/gradle.properties react-native/node_modules/react-native/scripts/cocoapods/new_architecture.rb 2>/dev/null
+```
+
+Result exit1 because final rg found no matching lines / suppressed absent optional paths; preceding `nl` reads completed and showed pipeline/queue/toolchain evidence. This is a source-search result, not a failed build/test.
+
+##### R10 — report creation
+
+`tools.apply_patch` added `/workspace/.audit-evidence/react-native.md` (this file), outside the checkout. No app code changed. Further official Expo source inspection commands and results are in `expo-docs.md`.
+
+##### R11 — evidence review and final status
+
+```sh
+sed -n '1,210p' /workspace/.audit-evidence/expo-docs.md && wc -l /workspace/.audit-evidence/react-native.md && git -C /workspace/traccar-client-sdk status --short
+```
+
+Result exit0; read delegated official Expo documentation evidence; report was214 lines before this addition; repository status clean. `tools.apply_patch` then added official-documentation synthesis and this ledger entry to this report only.
+
+##### R12 — final report review, read-only
+
+```sh
+rg -n '^##|^###|podspec|CocoaPods|prepare_command|Expo|New Architecture|15\.0|15\.1|react-native' /workspace/.audit-evidence/report-draft.md && sed -n '265,425p' /workspace/.audit-evidence/report-draft.md && sed -n '460,565p' /workspace/.audit-evidence/report-draft.md
+```
+
+Result exit0; output truncated, so no final review judgment relied on unread output. Targeted reads followed:
+
+```sh
+sed -n '262,299p' /workspace/.audit-evidence/report-draft.md && sed -n '364,381p' /workspace/.audit-evidence/report-draft.md && nl -ba /workspace/traccar-client-sdk/core/build.gradle.kts | sed -n '15,42p' && nl -ba /workspace/traccar-client-sdk/samples/android/build.gradle.kts | sed -n '1,28p' && nl -ba /workspace/traccar-client-sdk/react-native/react-native-traccar-client-sdk.podspec | sed -n '10,36p'
+```
+
+Result exit0; sections9/12 read completely, podspec iOS15.0 confirmed. No draft edits.
+
+```sh
+nl -ba /workspace/traccar-client-sdk/gradle/libs.versions.toml | sed -n '1,25p' && nl -ba /workspace/traccar-client-sdk/gradle/wrapper/gradle-wrapper.properties && nl -ba /workspace/traccar-client-sdk/react-native/package.json | tail -5 && nl -ba /workspace/.audit-evidence/cocoapods-dsl.rb | sed -n '492,506p' && nl -ba /workspace/traccar-client-sdk/react-native/node_modules/react-native/scripts/cocoapods/autolinking.rb | sed -n '162,168p' && nl -ba /workspace/.audit-evidence/expo-doc-sources/eas-platform.mdx | sed -n '16,42p'
+```
+
+Result exit0; wrapper has10 lines, package69 lines, CocoaPods/path citations and EAS image-selection caveat confirmed. Requested precise citation/minimum corrections from root.
+
+```sh
+rg -n '26\.6|Xcode 26|xcode-26' /workspace/.audit-evidence/expo-doc-sources/eas-platform.mdx && nl -ba /workspace/traccar-client-sdk/react-native/node_modules/react-native/scripts/cocoapods/helpers.rb | sed -n '81,89p'
+```
+
+Result exit0; EAS image source explicitly lists Xcode26.6 at446/451, and RN0.87.1's minimum iOS15.1 confirmed. `tools.apply_patch` appended this ledger only.
+
+### B6. Licence, dependency-source and privacy inspections
+
+### License audit command log
+
+Commands executed from /workspace/traccar-client-sdk unless a command explicitly changes directory. Normal TLS verification stayed enabled. These were inspection commands, official documentation/source downloads outside the checkout, and an npm packaging dry run. Markdown evidence writes are documentation only.
+
+#### L1
+
+```sh
+cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt && nl -ba LICENSE | sed -n '85,175p' && nl -ba gradle/libs.versions.toml && nl -ba react-native/package.json && rg --files /workspace/.cache/gradle -g '*.pom' -g '*LICENSE*' -g '*NOTICE*' | head -n 100
+```
+
+Exit: 0. Read full audit prompt, Apache 2.0 redistribution clauses, pinned dependency and RN metadata; discovered cached Gradle POM files.
+
+#### L2
+
+```sh
+python3 - <<'PY'
+import json,xml.etree.ElementTree as E
+from pathlib import Path
+base=Path('/workspace/.cache/gradle/caches/modules-2/files-2.1')
+keys=[('org.jetbrains.kotlin','kotlin-stdlib','2.4.20'),('org.jetbrains.kotlinx','kotlinx-coroutines-core','1.11.0'),('org.jetbrains.kotlinx','kotlinx-serialization-json','1.11.0'),('io.ktor','ktor-client-core','3.6.0'),('io.ktor','ktor-client-android','3.6.0'),('io.ktor','ktor-client-darwin','3.6.0'),('app.cash.sqldelight','runtime','2.4.0'),('app.cash.sqldelight','android-driver','2.4.0'),('app.cash.sqldelight','native-driver','2.4.0'),('io.insert-koin','koin-core','4.2.2'),('androidx.activity','activity','1.13.0'),('com.google.android.gms','play-services-location','21.4.0'),('com.squareup.okio','okio','3.16.2'),('co.touchlab','sqliter-driver','1.3.3')]
+ns={'m':'http://maven.apache.org/POM/4.0.0'}
+rows=[]
+for group,artifact,version in keys:
+ fs=list((base/group/artifact/version).glob('*/*.pom'))
+ if not fs:
+  print('MISSING',group,artifact,version); continue
+ f=fs[0]; root=E.parse(f).getroot(); licenses=[]
+ for l in root.findall('m:licenses/m:license',ns): licenses.append({a:l.findtext('m:'+a,namespaces=ns) for a in ['name','url','distribution']})
+ row={'dependency':f'{group}:{artifact}:{version}','pom':str(f),'licenses':licenses};rows.append(row); print(json.dumps(row))
+Path('/workspace/.audit-evidence/dependency-licenses.json').write_text(json.dumps(rows,indent=2))
+for pkg in ['react','react-native','typescript','react-native-builder-bob','@types/react']:
+ p=Path('react-native/node_modules')/pkg
+ x=json.loads((p/'package.json').read_text());print('NPM',pkg,x.get('version'),x.get('license'))
+ for f in sorted(p.glob('*LICENSE*'))+sorted(p.glob('*NOTICE*')):
+  print('LICENSE_FILE',str(f));print('\n'.join(f.read_text(errors='replace').splitlines()[:10]))
+PY
+nl -ba core/src/androidMain/kotlin/org/traccar/client/PlatformModule.kt
+nl -ba core/src/iosMain/kotlin/org/traccar/client/PlatformModule.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/HttpUploader.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/LogStore.kt
+nl -ba core/src/androidMain/AndroidManifest.xml
+nl -ba samples/android/src/main/AndroidManifest.xml
+rg -n 'analytics|firebase|sentry|crashlytics|http://|https://|logcat|Log\.|cleartext|encrypt|backup|identifier' core react-native samples -g '!build/**' -g '!node_modules/**' -g '!lib/**' -g '!package-lock.json' -g '!*.pbxproj' -g '!build/**' -g '!node_modules' -g '!lib' -g '!build'
+```
+
+Exit: 0. Extracted exact cached POM license declarations and npm license files; read SQL drivers/uploader/log retention/manifests; searched SDK code for analytics/network/encryption references.
+
+#### L3
+
+```sh
+python3 - <<'PY'
+import subprocess,hashlib
+from pathlib import Path
+urls={
+ 'upstream-sdk-license':'https://raw.githubusercontent.com/traccar/traccar-client-sdk/main/LICENSE',
+ 'full-client-license':'https://raw.githubusercontent.com/traccar/traccar-client/master/LICENSE',
+ 'server-license':'https://raw.githubusercontent.com/traccar/traccar/master/LICENSE',
+ 'google-play-services-terms':'https://developers.google.com/android/guides/overview',
+ 'android-sdk-terms':'https://developer.android.com/studio/terms',
+}
+for name,url in urls.items():
+ p=Path('/workspace/.audit-evidence')/(name+'.txt')
+ r=subprocess.run(['curl','--fail','--location','--silent','--show-error','--max-time','30','--output',str(p),'--write-out','%{http_code}',url],capture_output=True,text=True)
+ print(name,url,'exit',r.returncode,'HTTP',r.stdout,'error',r.stderr.strip())
+ if r.returncode==0:
+  content=p.read_text(errors='replace');print('sha256',hashlib.sha256(p.read_bytes()).hexdigest());print('\n'.join(content.splitlines()[:8]))
+PY
+git ls-files '*LICENSE*' '*NOTICE*'
+nl -ba core/src/commonMain/kotlin/org/traccar/client/Tracker.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/Log.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/Config.kt
+nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/LogEntry.sq
+nl -ba core/src/commonMain/sqldelight/org/traccar/client/db/Position.sq
+nl -ba react-native/ios/PrivacyInfo.xcprivacy
+nl -ba flutter/ios/traccar_client_sdk/Sources/traccar_client_sdk/PrivacyInfo.xcprivacy
+npm pack --dry-run --ignore-scripts --json --cache /workspace/.cache/npm --prefix react-native > /workspace/.audit-evidence/npm-pack-dry-run.json
+```
+
+Exit: 254. Fetched SDK LICENSE200; client/server bare LICENSE paths404 and Google docs403. npm pack using --prefix incorrectly targeted root and exited254 ENOENT; corrected by changing working directory next.
+
+#### L4
+
+```sh
+python3 - <<'PY'
+import subprocess,hashlib
+from pathlib import Path
+for repo,name in [('traccar/traccar-client','full-client'),('traccar/traccar','server')]:
+ for branch,file in [('master','LICENSE.txt'),('main','LICENSE'),('main','LICENSE.txt')]:
+  url=f'https://raw.githubusercontent.com/{repo}/{branch}/{file}';p=Path('/workspace/.audit-evidence')/(name+'-license.txt')
+  r=subprocess.run(['curl','--fail','--location','--silent','--show-error','--max-time','20','--output',str(p),'--write-out','%{http_code}',url],capture_output=True,text=True)
+  print(name,url,'exit',r.returncode,'HTTP',r.stdout,'error',r.stderr.strip())
+  if r.returncode==0:
+   print('sha256',hashlib.sha256(p.read_bytes()).hexdigest());print('\n'.join(p.read_text().splitlines()[:8]));break
+PY
+cd react-native
+npm pack --dry-run --ignore-scripts --json --cache /workspace/.cache/npm > /workspace/.audit-evidence/npm-pack-dry-run.json
+python3 - <<'PY'
+import json
+x=json.load(open('/workspace/.audit-evidence/npm-pack-dry-run.json'))
+for pkg in x:
+ print('Package:',pkg['name'],pkg['version'],'files',pkg['entryCount'])
+ print('Files:',*[f['path'] for f in pkg['files']],sep='\n')
+PY
+```
+
+Exit: 0. Client/server LICENSE.txt fetched200 and each declares Apache2. Local RN npm dry run passed17 files, absent LICENSE/NOTICE. No package archive written.
+
+#### L5
+
+```sh
+nl -ba core/src/commonMain/kotlin/org/traccar/client/LocationFilter.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/DatabaseQueue.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/TrackerEngine.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/ConfigStore.kt
+nl -ba core/src/commonMain/kotlin/org/traccar/client/StateStore.kt
+nl -ba core/build.gradle.kts | sed -n '35,65p'
+nl -ba react-native/node_modules/react/LICENSE | sed -n '1,22p'
+nl -ba react-native/node_modules/react-native/LICENSE | sed -n '1,22p'
+python3 - <<'PY'
+from pathlib import Path
+import json
+rows=json.load(open('/workspace/.audit-evidence/dependency-licenses.json'))
+for r in rows:
+ p=Path(r['pom']);lines=p.read_text().splitlines()
+ print(r['dependency'])
+ for n,line in enumerate(lines,1):
+  if '<licenses>' in line or '<license>' in line or '<name>' in line or '<url>' in line:
+   print(n,line.strip())
+PY
+git status --short
+```
+
+Exit: 0. Read filter/queue/engine/config persistence/MIT license clauses, enumerated exact POM license lines, and verified repository status clean.
+
+#### L6
+
+```sh
+curl --fail --location --silent --show-error --max-time 30 https://repo.maven.apache.org/maven2/app/cash/sqldelight/native-driver/2.4.0/native-driver-2.4.0-sources.jar --output /workspace/.audit-evidence/native-driver-2.4.0-sources.jar
+unzip -l /workspace/.audit-evidence/native-driver-2.4.0-sources.jar
+unzip -p /workspace/.audit-evidence/native-driver-2.4.0-sources.jar nativeMain/app/cash/sqldelight/driver/native/NativeSqlDatabase.kt | nl -ba
+curl --fail --location --silent --show-error --max-time 30 https://repo.maven.apache.org/maven2/co/touchlab/sqliter-driver/1.3.3/sqliter-driver-1.3.3-sources.jar --output /workspace/.audit-evidence/sqliter-driver-1.3.3-sources.jar
+unzip -l /workspace/.audit-evidence/sqliter-driver-1.3.3-sources.jar | head -n 80
+```
+
+Exit: 0. Fetch exact native-driver2.4.0 and SQLiter1.3.3 source archives via Maven Central to verify iOS database directory defaults.
+
+#### L7
+
+```sh
+unzip -p /workspace/.audit-evidence/sqliter-driver-1.3.3-sources.jar appleMain/co/touchlab/sqliter/DatabaseFileContext.kt | nl -ba
+unzip -p /workspace/.audit-evidence/sqliter-driver-1.3.3-sources.jar nativeCommonMain/co/touchlab/sqliter/DatabaseConfiguration.kt | nl -ba
+unzip -p /workspace/.audit-evidence/sqliter-driver-1.3.3-sources.jar nativeCommonMain/co/touchlab/sqliter/native/NativeDatabaseManager.kt | nl -ba | sed -n '1,110p'
+```
+
+Exit: 0. Read exact SQLiter Apple directory mapping and configuration defaults to trace iOS tracker.db storage path.
+
+#### L8
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+base=Path('/workspace/.audit-evidence/dependency-sources')
+base.mkdir(exist_ok=True)
+items=[('native-driver-2.4.0-sources.jar','nativeMain/app/cash/sqldelight/driver/native/NativeSqlDatabase.kt','NativeSqlDatabase-2.4.0.kt'),('sqliter-driver-1.3.3-sources.jar','appleMain/co/touchlab/sqliter/DatabaseFileContext.kt','DatabaseFileContext-apple-1.3.3.kt'),('sqliter-driver-1.3.3-sources.jar','nativeCommonMain/co/touchlab/sqliter/DatabaseConfiguration.kt','DatabaseConfiguration-1.3.3.kt')]
+for jar,member,target in items:
+ with ZipFile('/workspace/.audit-evidence/'+jar) as z:
+  dest=base/target;dest.write_bytes(z.read(member));print(dest)
+PY
+wc -l /workspace/.audit-evidence/licenses.md /workspace/.audit-evidence/commands-licenses.md
+git status --short
+```
+
+Exit: 0. Extracted exact dependency source excerpts outside checkout for line citations; licensing findings/report command log written; git status remains clean.
+
+### B7. Upstream identity/history/issues and external request ledger
+
+Full read-only stdout/stderr/exit statuses: `history-command-log.json` and `history-network-log.json`, under `/workspace/.audit-evidence`. Each `git show` output is also saved as `history-<sha>.diff`; complete HTTP bodies remain as `doc-*.txt`/JSON. Python standard-library transforms parsed HTML embedded JSON, extracted only cited fields, and formatted local evidence. No fetched page instructions were followed. The npm tarball was read with `tarfile.extractfile` (no installation/execution), and SHA-512 verification passed.
+
+| Executed command | Result |
+|---|---|
+| `cat /workspace/attachments/3a063738-4cb0-4431-ad34-61537cc7dd27/Traccar_Codex_Prompt.txt` | exit 0; CODEX TECHNICAL FEASIBILITY AUDIT |
+| `git -C /workspace/traccar-client-sdk log --date=iso-strict '--format=%H %aI %s'` | exit 0; 0e0db40ea6d58df47523af00c72716dae8c91213 2026-10-16T14:22:57Z Release 1.1.3 |
+| `git -C /workspace/traccar-client-sdk ls-remote https://github.com/traccar/traccar-client-sdk.git HEAD refs/heads/main 'refs/tags/*'` | exit 0; e56ca0840656e785629d7d3d2b0b275a6c110489	HEAD |
+| `git -C /workspace/traccar-client-sdk ls-remote origin HEAD refs/heads/main 'refs/tags/*'` | exit 0; 0e0db40ea6d58df47523af00c72716dae8c91213	HEAD |
+| `git -C /workspace/traccar-client-sdk log --all --oneline --regexp-ignore-case --grep=fix --grep=iOS --grep=Android --grep=heartbeat --grep=permission` | exit 0; ebbc55f Fix stationary heartbeat filtering |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch ebbc55f` | exit 0; commit ebbc55f8b14504d7394a5b2752fdd42cb7926743 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch 2311c06` | exit 0; commit 2311c064a6343ab51acde076bc186526793cb8f5 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch c8ecfe2` | exit 0; commit c8ecfe23cd710a50b750b2d8c3d0094e98bfe5a9 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch a7894bf` | exit 0; commit a7894bf4d96b6ece5696820680a0f1a16b0231d1 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch f7c04fc` | exit 0; commit f7c04fc514a81a9e75b1bb78fdb4cce8c468ac27 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch 01adf5c` | exit 0; commit 01adf5cd880acd424013c266060e56c8a86eb696 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch f32994e` | exit 0; commit f32994e96caa24efd1091ca954cc4d65a0a82b19 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch 15e44e5` | exit 0; commit 15e44e5cb77a1f086a0457b1a26b667d086bd551 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch aee6624` | exit 0; commit aee66244f1275879ae93f4c65e5d42fa545277b2 |
+| `git -C /workspace/traccar-client-sdk show --format=fuller --stat --patch f051a79` | exit 0; commit f051a790c1f290d2c29ba1d15f8251cfce567c2d |
+| `git ls-remote https://github.com/expo/expo.git HEAD` | exit 0; 028f70e53b1f199f93b4aeb6611d45e9404b8685	HEAD |
+| `git ls-remote https://github.com/transistorsoft/react-native-background-geolocation.git HEAD` | exit 0; 2a4af4d9de125b095d6a45f1eb6d3683a08cc559	HEAD |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-api.json --write-out '%{http_code}' https://api.github.com/repos/traccar/traccar-client-sdk` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-fork-api.json --write-out '%{http_code}' https://api.github.com/repos/Susurik/traccar-client-sdk` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-issues-api.json --write-out '%{http_code}' 'https://api.github.com/repos/traccar/traccar-client-sdk/issues?state=all&per_page=100'` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-releases.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/releases` | exit 0; HTTP 200; 331060 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-issues.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/issues` | exit 0; HTTP 200; 223643 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-readme.txt --write-out '%{http_code}' https://raw.githubusercontent.com/traccar/traccar-client-sdk/main/README.md` | exit 0; HTTP 200; 1421 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-location.txt --write-out '%{http_code}' https://docs.expo.dev/versions/latest/sdk/location/` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-taskmanager.txt --write-out '%{http_code}' https://docs.expo.dev/versions/latest/sdk/task-manager/` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-ios.txt --write-out '%{http_code}' https://docs.expo.dev/build/setup/` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-ios-device.txt --write-out '%{http_code}' https://docs.expo.dev/develop/development-builds/create-a-build/` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-apple-background.txt --write-out '%{http_code}' https://developer.apple.com/documentation/corelocation/handling-location-updates-in-the-background` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-apple-termination.txt --write-out '%{http_code}' https://developer.apple.com/documentation/corelocation/monitoring-location-changes-with-core-location` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-android-fgs.txt --write-out '%{http_code}' https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-play-location.txt --write-out '%{http_code}' https://support.google.com/googleplay/android-developer/answer/9799150` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-apple-review.txt --write-out '%{http_code}' https://developer.apple.com/app-store/review/guidelines/` | exit 56; HTTP 000; 0 bytes saved; proxy CONNECT 403 |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-alternative-transistorsoft.txt --write-out '%{http_code}' https://raw.githubusercontent.com/transistorsoft/react-native-background-geolocation/master/README.md` | exit 0; HTTP 200; 3751 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-alternative-transistorsoft-license.txt --write-out '%{http_code}' https://raw.githubusercontent.com/transistorsoft/react-native-background-geolocation/master/LICENSE` | exit 0; HTTP 200; 1079 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-package.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/packages/expo-location/package.json` | exit 0; HTTP 200; 2490 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-location-docsource.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/versions/unversioned/sdk/location.mdx` | exit 0; HTTP 200; 18280 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-docsource.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/build/setup.mdx` | exit 0; HTTP 200; 11741 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-fork-page.txt --write-out '%{http_code}' https://github.com/Susurik/traccar-client-sdk` | exit 0; HTTP 200; 244970 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-changelog.txt --write-out '%{http_code}' https://raw.githubusercontent.com/traccar/traccar-client-sdk/main/flutter/CHANGELOG.md` | exit 0; HTTP 200; 17661 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-compare.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/compare/v1.1.3...v1.1.4.diff` | exit 0; HTTP 200; 10946 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-latest-commits.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/commits/main/` | exit 0; HTTP 200; 411554 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-closed-issues.txt --write-out '%{http_code}' 'https://github.com/traccar/traccar-client-sdk/issues?q=is%3Aissue+is%3Aclosed'` | exit 0; HTTP 200; 213411 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-infrastructure.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/build-reference/infrastructure.mdx` | exit 0; HTTP 200; 18084 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-ios-process.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/build-reference/ios-builds.mdx` | exit 0; HTTP 200; 5666 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-eas-local.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/build-reference/local-builds.mdx` | exit 0; HTTP 200; 4895 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-taskmanager-source.txt --write-out '%{http_code}' https://raw.githubusercontent.com/expo/expo/main/docs/pages/versions/unversioned/sdk/task-manager.mdx` | exit 0; HTTP 200; 3814 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-issue-27.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/issues/27` | exit 0; HTTP 200; 228603 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-issue-26.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/issues/26` | exit 0; HTTP 200; 213632 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-issue-25.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/issues/25` | exit 0; HTTP 200; 232677 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-tag-v113.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/commit/a297767642e98193eb7939cbb4d54c101ff23610` | exit 0; HTTP 200; 225073 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-tag-v113-patch.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/commit/a297767642e98193eb7939cbb4d54c101ff23610.patch` | exit 0; HTTP 200; 891 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-upstream-release-v113.txt --write-out '%{http_code}' https://github.com/traccar/traccar-client-sdk/commit/0e0db40ea6d58df47523af00c72716dae8c91213` | exit 0; HTTP 200; 393724 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/doc-expo-npm-latest.json --write-out '%{http_code}' https://registry.npmjs.org/expo/latest` | exit 0; HTTP 200; 7571 bytes saved |
+| `curl --silent --show-error --location --max-time 30 --output /workspace/.audit-evidence/expo-latest.tgz --write-out '%{http_code}' https://registry.npmjs.org/expo/-/expo-58.0.22.tgz` | exit 0; HTTP 200; 703441 bytes saved |
+
+### B8. Additional official Expo documentation requests
+
+Commands were non-destructive reads except creating this evidence directory/files. The shells returned exit 0 unless noted; `curl` results below record each HTTP/transport outcome, since a Python loop itself exits 0 even when a subprocess fails. Downloaded 404 bodies are not treated as documentation.
+
+1. `mkdir -p /workspace/.audit-evidence/expo-doc-sources`, followed by a Python loop invoking `subprocess.run(['curl','--location','--silent','--show-error','--max-time','20','--output',str(p),'--write-out','%{http_code}',url],capture_output=True,text=True)` for each public-page URL below. Every listed request returned curl exit **56**, HTTP **000**, `CONNECT tunnel failed, response 403`:
+
+   - `https://docs.expo.dev/develop/development-builds/introduction/` → `dev-builds.html`
+   - `https://docs.expo.dev/config-plugins/introduction/` → `plugins.html`
+   - `https://docs.expo.dev/build/introduction/` → `eas-build.html`
+   - `https://docs.expo.dev/tutorial/eas/ios-development-build-for-devices/` → `eas-ios.html`
+   - `https://docs.expo.dev/versions/latest/sdk/location/` → `location.html`
+   - `https://docs.expo.dev/workflow/using-libraries/` → `using-libraries.html`
+   - `https://reactnative.dev/docs/legacy/native-modules-intro` → `rn-legacy.html`
+   - `https://reactnative.dev/architecture/landing-page` → `rn-new-arch.html`
+
+2. Same Python/curl invocation against the official raw documentation sources. Results: curl exit **0**, HTTP **200** except the explicitly listed 404:
+
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/develop/development-builds/introduction.mdx` → `dev-builds-src.mdx`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/config-plugins/introduction.mdx` → `plugins-src.mdx`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/build/introduction.mdx` → `eas-build-src.mdx`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/tutorial/eas/ios-development-build-for-devices.mdx` → `eas-ios-src.mdx`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/versions/unversioned/sdk/location.mdx` → `location-src.mdx`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/workflow/using-libraries.mdx` → `using-libraries-src.mdx`
+   - `https://raw.githubusercontent.com/facebook/react-native-website/main/docs/legacy/native-modules-intro.md` → `rn-legacy-src.mdx`
+   - `https://raw.githubusercontent.com/facebook/react-native-website/main/docs/the-new-architecture/landing-page.md` → `rn-new-arch-src.mdx`, HTTP **404**, unused.
+
+3. `rg -n -i 'native|go|build|apple|windows|account|background|permission|terminat|force|interoper|architecture|legacy|plugin|SDK|configuration' /workspace/.audit-evidence/expo-doc-sources/*src.mdx` → exit 0, relevant excerpts found; output truncated, so targeted reads below were used for claims.
+
+4. `cat .../eas-build-src.mdx` and `sed -n '24,94p' .../eas-ios-src.mdx` → hosted builds/signing requirements read. Then `curl --location --silent --show-error --max-time 20 --output <file> --write-out '%{http_code}' <url>` for both:
+
+   - `https://raw.githubusercontent.com/facebook/react-native-website/main/docs/the-new-architecture/_markdown_native_deprecation.mdx` → `rn-deprecation.mdx`, exit0/HTTP200.
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/build-reference/infrastructure.mdx` → `eas-platform.mdx`, exit0/HTTP200.
+
+5. `cat .../rn-deprecation.mdx`; `nl -ba .../eas-platform.mdx | sed -n '1,150p'` → legacy-module wording/toolchain-image docs read. Same curl invocation for:
+
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/build-reference/local-builds.mdx` → `eas-local.mdx`, exit0/HTTP200.
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/develop/development-builds/faq.mdx` → `dev-build-faq.mdx`, exit0/HTTP200.
+
+6. `rg -n -i 'windows|linux|macos|mac|xcode|apple|developer|paid|cloud|host' .../eas-local.mdx .../dev-build-faq.mdx` → local Windows limitations found. `git ls-remote https://github.com/expo/expo.git HEAD` → `028f70e53b1f199f93b4aeb6611d45e9404b8685`. `git ls-remote https://github.com/facebook/react-native-website.git HEAD` → `7e7996f2c7e60d9de2fceda60eddef5e10ae2d5c`. Same curl invocation for:
+
+   - `https://raw.githubusercontent.com/facebook/react-native-website/main/website/architecture/landing-page.md` → `architecture-index.md`, exit0/HTTP200 (correct location; no version compatibility proof).
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/versions/index.mdx` → `sdk-walkthrough.mdx`, exit0/HTTP404, unused.
+
+7. `nl -ba .../architecture-index.md | sed -n '1,145p'`; `nl -ba .../dev-build-faq.mdx | sed -n '16,68p'`; `nl -ba .../location-src.mdx | sed -n '126,172p'`; `nl -ba .../eas-local.mdx | sed -n '45,58p'` → targeted evidence above read, exit0.
+
+8. Same Python/curl invocation for the four sources below; all exit0/HTTP200:
+
+   - `https://raw.githubusercontent.com/expo/expo/main/templates/expo-template-blank/package.json` → `expo-template-package.txt`
+   - `https://raw.githubusercontent.com/expo/expo/main/packages/expo/package.json` → `expo-package.txt`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/build/setup.mdx` → `build-setup.txt`
+   - `https://raw.githubusercontent.com/expo/expo/main/docs/pages/app-signing/app-credentials.mdx` → `signing.txt`
+
+9. `cat .../expo-template-package.txt`; `rg -n -i 'windows|macos|apple|developer|account|membership|program|certificate|provision|99' .../build-setup.txt .../signing.txt`; `head -35 .../expo-package.txt` → template RN/Expo versions and membership/signing text read, exit0.
+
+10. `apply_patch` created this documentation-only evidence report. No app source changed by these operations.
+
+Limitations: No EAS account/signing/provisioning checked, EAS or Expo project installed, native host built, background tracking tested, or Apple/Google review result established. New Architecture compatibility and exact supported released Expo SDK remain **UNKNOWN**.
+
+### B9. Report integrity checks
+
+```sh
+python3 /workspace/.audit-evidence/assemble-report.py
+```
+
+Result exit 0: source-citation macros expanded to commit-pinned links; every cited source path and line span was validated against the actual checkout; source index and command ledgers inserted. No application files were edited.
+
+Final root verification ran `git diff --exit-code && git diff --cached --exit-code && git status --short` followed by a Python report-structure check. Overall exit **0**. Both tracked diffs were empty; status showed exactly `?? Traccar_CourierTax_Feasibility_Audit.md`. The Python checks validated no unexpanded citation tokens, balanced fenced code blocks, inserted source/command appendices, all five final answers, the captured passing Flutter analysis output, and unchanged tracked files. Result: **PASS**; report then contained 1,229 lines before this final ledger entry was inserted.
+
+The final ledger update and a second structure/status check also modify/inspect documentation only. No source, tests, dependency declaration, lockfile, Git commit, PR, or configuration draft was changed by this audit.
+
+
+
+## Five plain answers
+
+**1. Is Traccar's iOS background GPS code actually implemented?** Yes. Core Location background updates, significant-change monitoring, motion/regions and heartbeat code exist. Their reliability in a CourierTax consumer is unproven; RN integration and stationary/lifecycle gaps need work.
+
+**2. Is Traccar's Android background GPS code actually implemented?** Yes. Native provider, service/notification, permissions, buffering and power-management code exist, and the Android sample build passes. That is not a physical background-tracking test.
+
+**3. Can CourierTax be fully offline for GPS tracking and distance calculation without any Traccar server?** **YES WITH CHANGES.** The phone can record locally without a server, but the current SDK's upload queue/RN API do not provide the required permanent local route ledger. Add a supported local-only native store/API and shift/distance logic, or use another local-first engine. Do not use a fake URL or logs as the solution.
+
+**4. Can the SDK be incorporated into a commercial React Native/Expo app for Latvia?** Yes in principle under Apache-2.0 and dependency obligations, using a native development/release build. Resolve iOS packaging/lifecycle and version alignment, pass both-device tests, and satisfy store/privacy requirements. Expo Go and compilation alone are insufficient; Latvian tax compliance is a separate task.
+
+**5. Is Traccar SDK a better starting point than Comma for these requirements?** For the GPS engine, yes relative to the supplied finding that Comma's iOS implementation is a stub: Traccar has real code for both platforms. For the whole product, no blanket conclusion is justified. A fresh CourierTax app with a tested, replaceable GPS engine is the stronger starting architecture; selected Comma bookkeeping reuse needs its own source/licence review.
