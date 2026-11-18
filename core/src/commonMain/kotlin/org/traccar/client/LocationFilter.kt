@@ -35,8 +35,10 @@ class LocationFilter(
             Log.log("Location accepted ${position.latitude},${position.longitude}")
             return position
         }
+        val intervalMillis = locationConfig.intervalSeconds * 1000L
+        val intervalTolerance = minOf(intervalMillis / 10, MAX_INTERVAL_TOLERANCE_MILLIS)
         val timeTrigger = locationConfig.intervalSeconds > 0 &&
-            (position.time - previous.time) >= locationConfig.intervalSeconds * 1000L
+            (position.time - previous.time) >= intervalMillis - intervalTolerance
         val distanceTrigger = locationConfig.distanceMeters > 0 &&
             distance(previous, position) >= locationConfig.distanceMeters
         val angleTrigger = locationConfig.angleDegrees > 0 &&
@@ -73,5 +75,6 @@ class LocationFilter(
 
     private companion object {
         const val EARTH_RADIUS_METERS = 6_371_000.0
+        const val MAX_INTERVAL_TOLERANCE_MILLIS = 1000L
     }
 }
